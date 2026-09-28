@@ -19,6 +19,34 @@ const DEFAULT_SETTINGS = {
   openInNewTab: false
 };
 
+/* Seeded into the bookmark folder the first time the extension runs, so a fresh
+ * install opens onto something rather than an empty grid. They are ordinary
+ * bookmarks from that moment on: renaming, regrouping or deleting them sticks. */
+const DEFAULT_ITEMS = [
+  {
+    type: 'group',
+    title: 'AI tools',
+    items: [
+      { title: 'Claude', url: 'https://claude.ai' },
+      { title: 'ChatGPT', url: 'https://chatgpt.com' },
+      { title: 'Gemini', url: 'https://gemini.google.com' }
+    ]
+  },
+  {
+    type: 'group',
+    title: 'Social Media',
+    items: [
+      { title: 'Facebook', url: 'https://www.facebook.com' },
+      { title: 'X', url: 'https://x.com' },
+      { title: 'Instagram', url: 'https://www.instagram.com' },
+      { title: 'Reddit', url: 'https://www.reddit.com' },
+      { title: 'LinkedIn', url: 'https://www.linkedin.com' }
+    ]
+  },
+  { title: 'Wikipedia', url: 'https://www.wikipedia.org' },
+  { title: 'Yahoo', url: 'https://www.yahoo.com' }
+];
+
 let rootId = null;
 let settings = { ...DEFAULT_SETTINGS };
 let icons = {};                 // bookmarkId -> custom icon URL
@@ -255,7 +283,7 @@ export const store = {
 
   async init() {
     const saved = await chrome.storage.local.get([
-      'settings', 'icons', 'groupSizes', 'state', 'migrated'
+      'settings', 'icons', 'groupSizes', 'state', 'migrated', 'seeded'
     ]);
     settings = { ...DEFAULT_SETTINGS, ...(saved.settings || {}) };
     icons = saved.icons || {};
@@ -265,14 +293,20 @@ export const store = {
     rootId = root.id;
 
     // One-time lift of anything the pre-bookmark version had stored.
-    if (root.created && !saved.migrated && saved.state && saved.state.items?.length) {
+    const hasV1 = saved.state && saved.state.items?.length;
+    if (root.created && !saved.migrated && hasV1) {
       await importTree(saved.state.items, rootId);
       if (saved.state.settings) {
         settings = { ...settings, ...saved.state.settings };
         await chrome.storage.local.set({ settings });
       }
       await chrome.storage.local.set({ migrated: true });
+    } else if (root.created && !saved.seeded) {
+      await importTree(DEFAULT_ITEMS, rootId);
     }
+    // Marked whether or not we seeded: rebuilding a folder somebody deleted must not
+    // hand them the starter set a second time.
+    if (!saved.seeded) await chrome.storage.local.set({ seeded: true });
 
     await readTree();
     watch();
