@@ -128,74 +128,6 @@ timeout-based guess produces false alarms.
 One thing no extension can fix: the browser puts the caret in the address bar when a new tab
 opens, so the search box inside the frame is not focused. Click it, or type in the address bar.
 
-## Using it
-
-| Action | How |
-| --- | --- |
-| Add a shortcut | **+ Add**, or drag a link out of the search results onto the dial half |
-| Open a shortcut | Click it. Ctrl/Shift/middle-click opens a new tab |
-| Move a shortcut | Drag it to any slot in the grid |
-| Make a group | Drop one shortcut **onto another shortcut’s icon** — the icon lights up when it will merge |
-| Add to a group | Drop a shortcut onto the group tile’s icon |
-| Open a group | Click it. Click its name to rename |
-| Take one out | Open the group, drag the tile outside the box. Down to one item, the group dissolves |
-| Edit / remove | Right-click a tile |
-| Search | Use the engine's own box, in the search half |
-| Change engine | Settings → Search engine |
-| Add your own engine | Settings → Search engine → **+ Add a search engine…** |
-| Move the search half | The **⇄** button, or Settings → Search pane side |
-| Resize the halves | Drag the divider; double-click it to reset to 50/50 |
-
-Search sits on the **right** by default.
-
-## Search engines
-
-Settings → **Search engine** picks the engine the box submits to. Five are built in:
-
-| Engine | Query URL |
-| --- | --- |
-| Google | `https://www.google.com/search?q=%s` |
-| Bing | `https://www.bing.com/search?q=%s` |
-| DuckDuckGo | `https://duckduckgo.com/?q=%s` |
-| Yahoo | `https://search.yahoo.com/search?p=%s` |
-| Brave Search | `https://search.brave.com/search?q=%s` |
-
-**+ Add a search engine…** at the bottom of the list takes a name and a query URL with `%s`
-where the query goes — the same token `chrome://settings/searchEngines` uses, so a URL copied
-from there works unchanged. Added engines sit under **Yours** in the dropdown, and a **Remove**
-button appears whenever one of them is selected. Removing the engine currently in use falls
-back to Google rather than leaving the setting pointing at nothing.
-
-Enter searches in the current tab; Ctrl/Cmd/Shift+Enter searches in a new one.
-
-## Why only Google appears in the frame
-
-Only Google gets a page in the pane under the search box. That is not a preference — it is
-what the engines allow. Measured response headers:
-
-| Engine | Framing header |
-| --- | --- |
-| `google.com/webhp?igu=1` | none |
-| Bing | `X-Frame-Options: SAMEORIGIN` |
-| DuckDuckGo | `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'` |
-| Yahoo | `X-Frame-Options: DENY`, `frame-ancestors 'none'` |
-| Brave, Startpage, Ecosia | `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'` |
-
-`rules.json` is a `declarativeNetRequest` ruleset that strips `X-Frame-Options` and
-`Content-Security-Policy` from **sub-frame** responses on `google.com`, which is what lets
-`webhp?igu=1` render. Host permissions are limited to `*://*.google.com/*`, so nothing else is
-touched, and the rule is not extended to cover the other engines — that would mean stripping
-security headers across five more domains to win a preview nobody asked for.
-
-So an engine with no framable page shows the search box centred in its half, with no frame
-loaded at all. If Google's frame ever comes up blank, hover the half and use the **↗** button
-in its bottom corner. There is deliberately no "it failed" timer: a slow frame is not a blocked
-one, and the browser reports an `X-Frame-Options` block as a `load` event rather than an
-`error`, so any timeout-based guess produces false alarms.
-
-One thing no extension can fix reliably: the browser usually puts the caret in the address bar
-when a new tab opens. The box asks for focus, but the omnibox often wins.
-
 ## Permissions
 
 | Permission | Why |
@@ -205,6 +137,8 @@ when a new tab opens. The box asks for focus, but the omnibox often wins.
 | `favicon` | Tile icons from the browser's own favicon cache — no external requests |
 | `declarativeNetRequestWithHostAccess` + `*://*.google.com/*` | Strip frame-blocking headers on sub-frames, so the chosen engine renders. Google is granted at install as the default |
 | `optional_host_permissions` | Requested one site at a time, only when you pick another engine or add your own |
+
+Nothing is collected or sent anywhere — see [PRIVACY.md](PRIVACY.md).
 
 ## Files
 

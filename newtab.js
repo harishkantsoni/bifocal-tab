@@ -14,6 +14,7 @@ const $ = (id) => document.getElementById(id);
 const app = $('app');
 const searchFrame = $('searchFrame');
 const frameFallback = $('frameFallback');
+const frameFallbackLink = $('frameFallbackLink');
 const frameNoticeText = $('frameNoticeText');
 const frameGrantBtn = $('frameGrantBtn');
 const fieldEngine = $('fieldEngine');
@@ -21,7 +22,6 @@ const engineAdd = $('engineAdd');
 const engineError = $('engineError');
 const engineNote = $('engineNote');
 const removeEngineBtn = $('removeEngineBtn');
-const frameFallbackLink = $('frameFallbackLink');
 const popOut = $('popOut');
 const divider = $('divider');
 const paneDials = $('paneDials');
@@ -151,6 +151,18 @@ async function applyEngine() {
     frameFallback.hidden = false;
   }
 }
+
+// A frame that is merely slow must not be accused of refusing to load, so there is no
+// timeout here. Chrome fires `error` when the navigation itself fails; an X-Frame-Options
+// block fires `load` on an error document instead, which is why the pop-out button is
+// always available rather than gated on detection.
+// The missing-access notice is the exception: that one is not a guess, so a `load` on the
+// blocked document must not wipe it.
+searchFrame.addEventListener('load', () => {
+  if (frameGrantBtn.hidden) frameFallback.hidden = true;
+});
+searchFrame.addEventListener('error', () => { frameFallback.hidden = false; });
+$('frameNoticeClose').addEventListener('click', () => { frameFallback.hidden = true; });
 
 /* The only way back for an engine that was saved without access: re-picking the same
  * option in the dropdown fires no change event, so there would otherwise be nothing left
@@ -524,6 +536,11 @@ function closeEngineAdd() {
   $('fieldEngineUrl').value = '';
 }
 
+function showNote(text) {
+  engineNote.textContent = text;
+  engineNote.hidden = !text;
+}
+
 $('settingsBtn').addEventListener('click', () => {
   settingsForm.querySelector(`input[name=side][value="${store.settings.searchSide}"]`).checked = true;
   buildEngineOptions(store.settings.engineId);
@@ -533,15 +550,10 @@ $('settingsBtn').addEventListener('click', () => {
   settingsOverlay.hidden = false;
 });
 
-function showNote(text) {
-  engineNote.textContent = text;
-  engineNote.hidden = !text;
-}
-
 /* An engine is only selectable once Chrome has granted access to its site, since the
- * ruleset that unblocks framing does nothing without it. The request has to ride this
- * change event directly — awaiting anything first would lose the user gesture. */
-/* Not an async handler, and nothing is awaited before requestAccess(): chrome.permissions
+ * ruleset that unblocks framing does nothing without it.
+ *
+ * Not an async handler, and nothing is awaited before requestAccess(): chrome.permissions
  * .request() needs the user activation carried by this change event, and the first await
  * spends it — the call then throws instead of prompting. There is no has-it-already check
  * for the same reason, and none is needed: an origin that is already granted resolves

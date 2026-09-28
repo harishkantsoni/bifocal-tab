@@ -16,6 +16,9 @@
   "host_permissions": [
     "*://*.google.com/*"
   ],
+  "optional_host_permissions": [
+    "*://*/*"
+  ],
   "declarative_net_request": {
     "rule_resources": [
       {
@@ -30,8 +33,5 @@
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  },
-  "optional_host_permissions": [
-    "*://*/*"
-  ]
+  }
 }

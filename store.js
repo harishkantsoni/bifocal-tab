@@ -13,7 +13,9 @@ const LEGACY_TITLES = ['Minimal New Tab', 'Focus New Tab'];
 /* Search engines.
  *
  * `url` is the engine's own page, loaded straight into the frame — there is no search box
- * of our own anywhere in this extension.
+ * of our own anywhere in this extension. `origin` is stated rather than derived, because
+ * several of these search from a subdomain and the permission has to line up with the
+ * registrable domain the ruleset keys on.
  *
  * Every engine except Google refuses to be framed (measured: Bing, Brave and DuckDuckGo
  * answer X-Frame-Options: SAMEORIGIN, Yahoo answers DENY, and most add frame-ancestors on
@@ -21,8 +23,6 @@ const LEGACY_TITLES = ['Minimal New Tab', 'Focus New Tab'];
  * granted: the manifest asks for declarativeNetRequestWithHostAccess, so a rule whose
  * domain has no host permission simply never fires. Google ships as a granted origin
  * because it is the default; the rest are requested the moment they are chosen. */
-/* `origin` is stated rather than derived: several of these search from a subdomain, and
- * the permission has to line up with the registrable domain the ruleset keys on. */
 export const ENGINES = [
   { id: 'google',     name: 'Google',       url: 'https://www.google.com/webhp?igu=1', origin: '*://*.google.com/*' },
   { id: 'bing',       name: 'Bing',         url: 'https://www.bing.com/',              origin: '*://*.bing.com/*' },
@@ -363,27 +363,9 @@ export const store = {
 
   async init() {
     const saved = await chrome.storage.local.get([
-      'settings', 'icons', 'groupSizes', 'state', 'migrated', 'seeded', 'engineMigrated'
+      'settings', 'icons', 'groupSizes', 'state', 'migrated', 'seeded'
     ]);
     settings = { ...DEFAULT_SETTINGS, ...(saved.settings || {}) };
-
-    /* Installs from before the engine picker stored the frame's page as `searchUrl`.
-     * That is exactly what an engine is now, so anything that was not the old Google
-     * default carries straight over as a custom engine and stays selected. Once only. */
-    if (!saved.engineMigrated) {
-      const legacy = (saved.settings || {}).searchUrl;
-      if (legacy && !legacy.startsWith('https://www.google.com/webhp')) {
-        const id = CUSTOM_PREFIX + Date.now();
-        settings.customEngines = [
-          ...(settings.customEngines || []),
-          { id, name: hostOf(legacy) || 'Custom', url: legacy }
-        ];
-        settings.engineId = id;
-      }
-      delete settings.searchUrl;
-      await chrome.storage.local.set({ settings, engineMigrated: true });
-      await syncCustomRules();
-    }
     icons = saved.icons || {};
     groupSizes = saved.groupSizes || {};
 
