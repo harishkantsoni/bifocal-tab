@@ -22,6 +22,7 @@ const DEFAULT_SETTINGS = {
 let rootId = null;
 let settings = { ...DEFAULT_SETTINGS };
 let icons = {};                 // bookmarkId -> custom icon URL
+let groupSizes = {};            // folderId -> children last seen, to spot a folder that shrank
 let items = [];                 // derived view of the root folder's children
 const lastOrder = new Map();    // parentId -> comma-joined child ids, to skip no-op reorders
 const changeListeners = new Set();
@@ -93,11 +94,19 @@ function toItem(node) {
       icon: icons[node.id]
     };
   }
+  /* Last resort for a folder with nothing in it: draw no tile rather than a blank one.
+   * A group drained of bookmarks is normally unwound before this (see dissolveThinGroups);
+   * what reaches here is a folder that never held two, such as one created empty in the
+   * bookmark manager, and deleting that behind somebody's back is not ours to do. It
+   * reappears as a tile the moment it holds a bookmark again. */
+  const kids = (node.children || []).map(toItem).filter(Boolean);
+  if (!kids.length) return null;
+
   return {
     id: node.id,
     type: 'group',
     title: node.title || 'Group',
-    items: (node.children || []).map(toItem)
+    items: kids
   };
 }
 
@@ -105,6 +114,23 @@ function rememberOrder(node) {
   if (node.url) return;
   lastOrder.set(node.id, (node.children || []).map((c) => c.id).join(','));
   for (const child of node.children || []) rememberOrder(child);
+}
+
+/* How many bookmarks each group held when we last looked. Kept on disk because the
+ * deletion that drains a group often happens with no new tab page open to see it. */
+function collectSizes(node, out) {
+  if (node.url) return out;
+  if (node.id !== rootId) out[node.id] = (node.children || []).length;
+  for (const child of node.children || []) collectSizes(child, out);
+  return out;
+}
+
+async function rememberSizes(subtree) {
+  const next = collectSizes(subtree, {});
+  const same = Object.keys(next).length === Object.keys(groupSizes).length
+    && Object.keys(next).every((id) => groupSizes[id] === next[id]);
+  groupSizes = next;
+  if (!same) await chrome.storage.local.set({ groupSizes });
 }
 
 async function readTree() {
@@ -116,9 +142,17 @@ async function readTree() {
     rootId = fresh.id;
     [subtree] = await chrome.bookmarks.getSubTree(rootId);
   }
+
+  // A group drained outside the extension is unwound here, whether the deletion landed
+  // while a new tab watched it or while none was open.
+  if (await dissolveThinGroups({ shrunkOnly: true })) {
+    [subtree] = await chrome.bookmarks.getSubTree(rootId);
+  }
+
   lastOrder.clear();
   rememberOrder(subtree);
-  items = (subtree.children || []).map(toItem);
+  await rememberSizes(subtree);
+  items = (subtree.children || []).map(toItem).filter(Boolean);
   return items;
 }
 
@@ -171,31 +205,47 @@ async function mergeInto(dragId, targetId) {
 /** Android-style: a folder that falls to one member stops being a folder. The last
  *  bookmark moves back out to where the folder sat, and the empty folder is removed.
  *
- *  This runs only straight after one of our own mutations, never on a plain read, so
- *  opening a new tab cannot quietly restructure a one-bookmark folder made by hand.
- *  Deepest folders go first, so nesting unwinds from the inside out. */
-function firstThinFolder(node) {
+ *  Deepest folders go first, so nesting unwinds from the inside out.
+ *
+ *  `shrunkOnly` is the pass a plain read is allowed to make: it touches a folder only
+ *  where the recorded size says it used to hold two or more, so a deletion made in the
+ *  bookmark manager still unwinds, while a one-bookmark folder somebody built by hand is
+ *  left exactly as they left it. Our own mutations run the unrestricted pass. */
+function firstThinFolder(node, shrunkOnly) {
   for (const child of node.children || []) {
     if (child.url) continue;
-    const deeper = firstThinFolder(child);
+    const deeper = firstThinFolder(child, shrunkOnly);
     if (deeper) return deeper;
-    if ((child.children || []).length <= 1) return child;
+    const thin = (child.children || []).length <= 1;
+    if (thin && (!shrunkOnly || groupSizes[child.id] >= 2)) return child;
   }
   return null;
 }
 
-async function dissolveThinGroups() {
+/** Returns whether anything moved, so a caller holding a tree snapshot knows to re-read. */
+async function dissolveThinGroups({ shrunkOnly = false } = {}) {
+  let changed = false;
   for (let guard = 0; guard < 50; guard++) {
-    const [tree] = await chrome.bookmarks.getSubTree(rootId);
-    const thin = firstThinFolder(tree);
-    if (!thin) return;
+    let tree;
+    try {
+      [tree] = await chrome.bookmarks.getSubTree(rootId);
+    } catch { return changed; }              // root went away; readTree rebuilds it
+
+    const thin = firstThinFolder(tree, shrunkOnly);
+    if (!thin) return changed;
 
     const kids = thin.children || [];
-    if (kids.length === 1) {
-      await chrome.bookmarks.move(kids[0].id, { parentId: thin.parentId, index: thin.index });
-    }
-    await chrome.bookmarks.remove(thin.id);   // empty by now, so remove() is safe
+    try {
+      if (kids.length === 1) {
+        await chrome.bookmarks.move(kids[0].id, { parentId: thin.parentId, index: thin.index });
+      }
+      await chrome.bookmarks.remove(thin.id); // empty by now, so remove() is safe
+    } catch { return changed; }               // another new tab got there first
+
+    delete groupSizes[thin.id];
+    changed = true;
   }
+  return changed;
 }
 
 export const store = {
@@ -204,9 +254,12 @@ export const store = {
   get rootId() { return rootId; },
 
   async init() {
-    const saved = await chrome.storage.local.get(['settings', 'icons', 'state', 'migrated']);
+    const saved = await chrome.storage.local.get([
+      'settings', 'icons', 'groupSizes', 'state', 'migrated'
+    ]);
     settings = { ...DEFAULT_SETTINGS, ...(saved.settings || {}) };
     icons = saved.icons || {};
+    groupSizes = saved.groupSizes || {};
 
     const root = await resolveRoot();
     rootId = root.id;

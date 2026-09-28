@@ -465,11 +465,15 @@ settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const url = normalizeUrl($('fieldSearchUrl').value) || DEFAULT_SEARCH_URL;
   const urlChanged = url !== store.settings.searchUrl;
+  const side = settingsForm.querySelector('input[name=side]:checked').value;
+  const sideChanged = side !== store.settings.searchSide;
 
   await store.setSettings({
-    searchSide: settingsForm.querySelector('input[name=side]:checked').value,
+    searchSide: side,
     searchUrl: url,
-    openInNewTab: $('fieldNewTab').checked
+    openInNewTab: $('fieldNewTab').checked,
+    // swapping sides keeps each pane the width it had
+    ...(sideChanged ? { splitRatio: 1 - store.settings.splitRatio } : {})
   });
 
   settingsOverlay.hidden = true;
@@ -477,16 +481,12 @@ settingsForm.addEventListener('submit', async (e) => {
   if (urlChanged) applySearchUrl();
 });
 
-$('resetLayoutBtn').addEventListener('click', async () => {
-  await store.setSettings({ splitRatio: 0.5 });
-  applyLayout();
-});
-
-$('swapBtn').addEventListener('click', async () => {
-  await store.setSettings({
-    searchSide: store.settings.searchSide === 'left' ? 'right' : 'left',
-    splitRatio: 1 - store.settings.splitRatio   // keep each pane its own width
-  });
+$('flipSidesBtn').addEventListener('click', async () => {
+  const side = store.settings.searchSide === 'left' ? 'right' : 'left';
+  // each half keeps the width it had, it just changes ends
+  await store.setSettings({ searchSide: side, splitRatio: 1 - store.settings.splitRatio });
+  // keep the open form in step so saving it does not undo the flip
+  settingsForm.querySelector(`input[name=side][value="${side}"]`).checked = true;
   applyLayout();
 });
 
