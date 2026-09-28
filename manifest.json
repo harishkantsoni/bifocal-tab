@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "Focus New Tab",
+  "name": "Bifocal Tab",
   "version": "1.0.0",
-  "description": "Split new tab: Google search on one half, drag-and-drop speed dials and groups on the other.",
+  "description": "Split new tab: search on one half, bookmark-backed speed dials and groups on the other.",
   "minimum_chrome_version": "108",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
   },
   "permissions": [
+    "bookmarks",
     "storage",
     "favicon",
     "declarativeNetRequestWithHostAccess"

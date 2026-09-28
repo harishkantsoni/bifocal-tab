@@ -1,19 +1,8 @@
-/* Focus New Tab — split new tab page with Google on one half and speed dials on the other. */
+/* Bifocal Tab — split new tab page with search on one half and bookmark-backed
+ * speed dials on the other. */
 
-const DEFAULT_SEARCH_URL = 'https://www.google.com/webhp?igu=1';
+import { store, find, hostOf, normalizeUrl, DEFAULT_SEARCH_URL } from './store.js';
 
-const DEFAULT_STATE = {
-  version: 1,
-  settings: {
-    searchSide: 'right',     // which half holds the search frame
-    splitRatio: 0.5,         // width of whichever pane sits on the left
-    searchUrl: DEFAULT_SEARCH_URL,
-    openInNewTab: false
-  },
-  items: []                  // [{id,type:'dial',title,url,icon?} | {id,type:'group',title,items:[dial]}]
-};
-
-let state = structuredClone(DEFAULT_STATE);
 let openGroupId = null;
 
 /* ---------------------------------------------------------------- elements */
@@ -38,21 +27,6 @@ const settingsForm = $('settingsForm');
 const ctxMenu = $('ctxMenu');
 
 /* ------------------------------------------------------------------ utils */
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-
-function normalizeUrl(raw) {
-  const s = (raw || '').trim();
-  if (!s) return null;
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) || /^(about|chrome|edge|file):/i.test(s)
-    ? s
-    : 'https://' + s;
-  try { return new URL(withScheme).href; } catch { return null; }
-}
-
-function hostOf(url) {
-  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url || ''; }
-}
-
 function hueOf(str) {
   let h = 0;
   for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
@@ -66,74 +40,10 @@ function faviconUrl(pageUrl, size) {
   return u.toString();
 }
 
-/* ---------------------------------------------------------------- storage */
-async function loadState() {
-  try {
-    const stored = await chrome.storage.local.get('state');
-    if (stored && stored.state) {
-      state = {
-        ...DEFAULT_STATE,
-        ...stored.state,
-        settings: { ...DEFAULT_STATE.settings, ...(stored.state.settings || {}) },
-        items: Array.isArray(stored.state.items) ? stored.state.items : []
-      };
-    }
-  } catch (err) {
-    console.warn('Could not read saved state, starting fresh.', err);
-  }
-}
-
-let saveTimer = null;
-function save() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    chrome.storage.local.set({ state }).catch((err) => console.warn('Save failed', err));
-  }, 120);
-}
-
-/* ------------------------------------------------------------ item lookup */
-function flatten(list, map = new Map()) {
-  for (const item of list) {
-    map.set(item.id, item);
-    if (item.type === 'group') flatten(item.items, map);
-  }
-  return map;
-}
-
-/** Find an item plus the array that holds it. */
-function locate(id, list = state.items) {
-  const i = list.findIndex((it) => it.id === id);
-  if (i !== -1) return { list, index: i, item: list[i] };
-  for (const item of list) {
-    if (item.type === 'group') {
-      const hit = locate(id, item.items);
-      if (hit) return hit;
-    }
-  }
-  return null;
-}
-
-/** A group with 0 or 1 members stops being a group, like a phone home screen. */
-function normalize() {
-  for (let i = state.items.length - 1; i >= 0; i--) {
-    const item = state.items[i];
-    if (item.type !== 'group') continue;
-    if (item.items.length === 0) {
-      state.items.splice(i, 1);
-      if (openGroupId === item.id) closeGroup();
-    } else if (item.items.length === 1) {
-      const only = item.items[0];
-      state.items.splice(i, 1, only);
-      if (openGroupId === item.id) closeGroup();
-    }
-  }
-}
-
 /* --------------------------------------------------------------- rendering */
 function iconNode(dial, big) {
-  const src = dial.icon || faviconUrl(dial.url, big ? 64 : 32);
   const img = document.createElement('img');
-  img.src = src;
+  img.src = dial.icon || faviconUrl(dial.url, big ? 64 : 32);
   img.alt = '';
   img.draggable = false;
   img.addEventListener('error', () => img.replaceWith(letterNode(dial)), { once: true });
@@ -162,7 +72,9 @@ function makeTile(item, container) {
   const icon = document.createElement('div');
   icon.className = 'tile-icon';
   if (item.type === 'group') {
-    for (const child of item.items.slice(0, 4)) icon.appendChild(iconNode(child, false));
+    for (const child of item.items.filter((c) => c.type === 'dial').slice(0, 4)) {
+      icon.appendChild(iconNode(child, false));
+    }
   } else {
     icon.appendChild(iconNode(item, true));
   }
@@ -176,28 +88,33 @@ function makeTile(item, container) {
 }
 
 function render() {
-  dialGrid.replaceChildren(...state.items.map((it) => makeTile(it, 'root')));
-  emptyHint.hidden = state.items.length > 0;
+  dialGrid.replaceChildren(...store.items.map((it) => makeTile(it, 'root')));
+  emptyHint.hidden = store.items.length > 0;
   if (openGroupId) renderGroup();
 }
 
 function renderGroup() {
-  const group = flatten(state.items).get(openGroupId);
+  const group = find(openGroupId);
   if (!group || group.type !== 'group') { closeGroup(); return; }
   if (document.activeElement !== groupTitle) groupTitle.value = group.title;
   groupGrid.replaceChildren(...group.items.map((it) => makeTile(it, 'group')));
 }
 
+async function refresh() {
+  await store.refresh();
+  render();
+}
+
 /* ------------------------------------------------------------------ layout */
 function applyLayout() {
-  const { searchSide, splitRatio } = state.settings;
+  const { searchSide, splitRatio } = store.settings;
   app.classList.toggle('search-right', searchSide !== 'left');
   app.classList.toggle('search-left', searchSide === 'left');
   app.style.setProperty('--split', (splitRatio * 100).toFixed(2) + '%');
 }
 
 function applySearchUrl() {
-  const url = state.settings.searchUrl || DEFAULT_SEARCH_URL;
+  const url = store.settings.searchUrl || DEFAULT_SEARCH_URL;
   frameFallbackLink.href = url;
   popOut.href = url;
   frameFallback.hidden = true;
@@ -218,9 +135,9 @@ divider.addEventListener('pointerdown', (e) => {
   divider.setPointerCapture(e.pointerId);
   document.body.classList.add('resizing');
 
+  let ratio = store.settings.splitRatio;
   const move = (ev) => {
-    const ratio = Math.min(0.85, Math.max(0.15, ev.clientX / window.innerWidth));
-    state.settings.splitRatio = ratio;
+    ratio = Math.min(0.85, Math.max(0.15, ev.clientX / window.innerWidth));
     app.style.setProperty('--split', (ratio * 100).toFixed(2) + '%');
   };
   const up = () => {
@@ -228,27 +145,26 @@ divider.addEventListener('pointerdown', (e) => {
     divider.removeEventListener('pointerup', up);
     divider.removeEventListener('pointercancel', up);
     document.body.classList.remove('resizing');
-    save();
+    store.setSettings({ splitRatio: ratio });
   };
   divider.addEventListener('pointermove', move);
   divider.addEventListener('pointerup', up);
   divider.addEventListener('pointercancel', up);
 });
 
-divider.addEventListener('dblclick', () => {
-  state.settings.splitRatio = 0.5;
+divider.addEventListener('dblclick', async () => {
+  await store.setSettings({ splitRatio: 0.5 });
   applyLayout();
-  save();
 });
 
-divider.addEventListener('keydown', (e) => {
-  const step = e.shiftKey ? 0.05 : 0.01;
+divider.addEventListener('keydown', async (e) => {
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
   e.preventDefault();
-  const delta = e.key === 'ArrowLeft' ? -step : step;
-  state.settings.splitRatio = Math.min(0.85, Math.max(0.15, state.settings.splitRatio + delta));
+  const step = (e.shiftKey ? 0.05 : 0.01) * (e.key === 'ArrowLeft' ? -1 : 1);
+  await store.setSettings({
+    splitRatio: Math.min(0.85, Math.max(0.15, store.settings.splitRatio + step))
+  });
   applyLayout();
-  save();
 });
 
 /* ------------------------------------------------------------ drag & drop */
@@ -258,18 +174,16 @@ function onTilePointerDown(e) {
   if (e.button !== 0) return;
   const tile = e.target.closest('.tile');
   if (!tile) return;
-
-  const entry = locate(tile.dataset.id);
-  if (!entry) return;
+  const item = find(tile.dataset.id);
+  if (!item) return;
 
   drag = {
     tile,
     id: tile.dataset.id,
-    item: entry.item,
+    item,
     container: tile.dataset.container,
     startX: e.clientX,
     startY: e.clientY,
-    pointerId: e.pointerId,
     started: false,
     mergeTargetId: null,
     ghost: null
@@ -292,7 +206,6 @@ function beginDrag(e) {
 
   const ghost = drag.tile.cloneNode(true);
   ghost.classList.add('ghost');
-  ghost.classList.remove('dragging');
   ghost.style.width = rect.width + 'px';
   document.body.appendChild(ghost);
   drag.ghost = ghost;
@@ -316,12 +229,13 @@ function onTilePointerMove(e) {
 
   moveGhost(e.clientX, e.clientY);
 
-  // Which grid is the pointer over? Dials can travel in and out of an open group.
+  // Dials can travel in and out of an open group; a group itself stays at the root.
   let targetGrid = dialGrid;
   if (openGroupId && !groupOverlay.hidden && drag.item.type === 'dial') {
     const r = groupPanel.getBoundingClientRect();
-    const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-    if (inside) targetGrid = groupGrid;
+    if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+      targetGrid = groupGrid;
+    }
   }
   if (drag.tile.parentElement !== targetGrid) {
     targetGrid.appendChild(drag.tile);
@@ -337,11 +251,10 @@ function onTilePointerMove(e) {
 
   if (overTile && overTile !== drag.tile && overTile.parentElement === targetGrid) {
     const r = overTile.getBoundingClientRect();
-    const nearCentreX = Math.abs(e.clientX - (r.left + r.width / 2)) < r.width * 0.26;
-    const nearCentreY = Math.abs(e.clientY - (r.top + r.height / 2)) < r.height * 0.28;
-    const canMerge = drag.container === 'root' && drag.item.type === 'dial' && nearCentreX && nearCentreY;
+    const nearCentre = Math.abs(e.clientX - (r.left + r.width / 2)) < r.width * 0.26
+                    && Math.abs(e.clientY - (r.top + r.height / 2)) < r.height * 0.28;
 
-    if (canMerge) {
+    if (drag.container === 'root' && drag.item.type === 'dial' && nearCentre) {
       drag.mergeTargetId = overTile.dataset.id;
       overTile.classList.add('merge-target');
       return;
@@ -359,8 +272,7 @@ function onTilePointerMove(e) {
 
 /** Nearest gap when the pointer sits between or past the tiles. */
 function insertionPoint(grid, x, y) {
-  const tiles = [...grid.children].filter((el) => el !== drag.tile);
-  for (const tile of tiles) {
+  for (const tile of [...grid.children].filter((el) => el !== drag.tile)) {
     const r = tile.getBoundingClientRect();
     if (y < r.bottom && x < r.left + r.width / 2) return tile;
     if (y < r.top) return tile;
@@ -372,22 +284,11 @@ function clearMergeHighlight() {
   for (const el of document.querySelectorAll('.tile.merge-target')) el.classList.remove('merge-target');
 }
 
-/** Read the DOM back into state so the visual order wins. */
-function syncFromDom() {
-  const map = flatten(state.items);
-  const idsOf = (grid) => [...grid.children]
-    .filter((el) => el.classList.contains('tile'))
-    .map((el) => map.get(el.dataset.id))
-    .filter(Boolean);
+const idsIn = (grid) => [...grid.children]
+  .filter((el) => el.classList.contains('tile'))
+  .map((el) => el.dataset.id);
 
-  if (openGroupId && !groupOverlay.hidden) {
-    const group = map.get(openGroupId);
-    if (group && group.type === 'group') group.items = idsOf(groupGrid);
-  }
-  state.items = idsOf(dialGrid);
-}
-
-function onTilePointerUp(e) {
+async function onTilePointerUp(e) {
   if (!drag) return;
   const d = drag;
   d.tile.removeEventListener('pointermove', onTilePointerMove);
@@ -405,35 +306,14 @@ function onTilePointerUp(e) {
   document.body.classList.remove('dragging');
   clearMergeHighlight();
 
-  syncFromDom();
-
-  if (d.mergeTargetId && d.mergeTargetId !== d.id) merge(d.id, d.mergeTargetId);
-
-  normalize();
-  render();
-  save();
-}
-
-/** Drop a dial onto another tile: join its group, or start a new one. */
-function merge(dragId, targetId) {
-  const dragged = locate(dragId);
-  const target = locate(targetId);
-  if (!dragged || !target || dragged.item.type !== 'dial') return;
-
-  dragged.list.splice(dragged.index, 1);
-  const t = locate(targetId); // index may have shifted after the splice
-  if (!t) return;
-
-  if (t.item.type === 'group') {
-    t.item.items.push(dragged.item);
-  } else {
-    t.list.splice(t.index, 1, {
-      id: uid(),
-      type: 'group',
-      title: 'Group',
-      items: [t.item, dragged.item]
-    });
-  }
+  await store.applyDrop({
+    rootIds: idsIn(dialGrid),
+    groupId: openGroupId && !groupOverlay.hidden ? openGroupId : null,
+    groupIds: openGroupId && !groupOverlay.hidden ? idsIn(groupGrid) : null,
+    dragId: d.id,
+    mergeTargetId: d.mergeTargetId
+  });
+  await refresh();
 }
 
 dialGrid.addEventListener('pointerdown', onTilePointerDown);
@@ -442,20 +322,21 @@ groupGrid.addEventListener('pointerdown', onTilePointerDown);
 /* --------------------------------------------------------------- open item */
 function activate(item, e) {
   if (item.type === 'group') { openGroup(item.id); return; }
-  const newTab = state.settings.openInNewTab || e.ctrlKey || e.metaKey || e.shiftKey;
-  if (newTab) window.open(item.url, '_blank', 'noreferrer');
-  else location.href = item.url;
+  if (store.settings.openInNewTab || e.ctrlKey || e.metaKey || e.shiftKey) {
+    window.open(item.url, '_blank', 'noreferrer');
+  } else {
+    location.href = item.url;
+  }
 }
 
-// Middle-click always opens a new tab.
 for (const grid of [dialGrid, groupGrid]) {
   grid.addEventListener('auxclick', (e) => {
     if (e.button !== 1) return;
     const tile = e.target.closest('.tile');
     if (!tile) return;
     e.preventDefault();
-    const entry = locate(tile.dataset.id);
-    if (entry && entry.item.type === 'dial') window.open(entry.item.url, '_blank', 'noreferrer');
+    const item = find(tile.dataset.id);
+    if (item && item.type === 'dial') window.open(item.url, '_blank', 'noreferrer');
   });
   grid.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); });
 }
@@ -477,22 +358,21 @@ groupOverlay.addEventListener('pointerdown', (e) => {
   if (e.target === groupOverlay) closeGroup();
 });
 
+let renameTimer = null;
 groupTitle.addEventListener('input', () => {
-  const group = flatten(state.items).get(openGroupId);
-  if (!group) return;
-  group.title = groupTitle.value.trim() || 'Group';
-  const tile = dialGrid.querySelector(`.tile[data-id="${CSS.escape(group.id)}"] .tile-label`);
-  if (tile) tile.textContent = group.title;
-  save();
+  const id = openGroupId;
+  const title = groupTitle.value.trim() || 'Group';
+  const label = dialGrid.querySelector(`.tile[data-id="${CSS.escape(id)}"] .tile-label`);
+  if (label) label.textContent = title;
+  clearTimeout(renameTimer);
+  renameTimer = setTimeout(() => store.rename(id, title), 400);
 });
 
-$('ungroupBtn').addEventListener('click', () => {
-  const entry = locate(openGroupId);
-  if (!entry || entry.item.type !== 'group') return;
-  entry.list.splice(entry.index, 1, ...entry.item.items);
+$('ungroupBtn').addEventListener('click', async () => {
+  const id = openGroupId;
   closeGroup();
-  render();
-  save();
+  await store.ungroup(id);
+  await refresh();
 });
 
 /* --------------------------------------------------------- add / edit form */
@@ -500,7 +380,7 @@ let editingId = null;
 
 function openEdit(id) {
   editingId = id;
-  const item = id ? flatten(state.items).get(id) : null;
+  const item = id ? find(id) : null;
   $('editTitle').textContent = item ? 'Edit shortcut' : 'Add shortcut';
   $('fieldUrl').value = item ? item.url : '';
   $('fieldName').value = item ? (item.title || '') : '';
@@ -510,71 +390,59 @@ function openEdit(id) {
   $('fieldUrl').select();
 }
 
-editForm.addEventListener('submit', (e) => {
+editForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const url = normalizeUrl($('fieldUrl').value);
   if (!url) { $('fieldUrl').focus(); return; }
   const title = $('fieldName').value.trim() || hostOf(url);
-  const icon = normalizeUrl($('fieldIcon').value) || undefined;
+  const icon = normalizeUrl($('fieldIcon').value) || null;
 
-  if (editingId) {
-    const entry = locate(editingId);
-    if (entry) Object.assign(entry.item, { url, title, icon });
-  } else {
-    state.items.push({ id: uid(), type: 'dial', title, url, icon });
-  }
+  const id = editingId;
   editOverlay.hidden = true;
   editingId = null;
-  render();
-  save();
+
+  if (id) await store.updateDial(id, { url, title, icon });
+  else await store.addDial({ url, title, icon, parentId: openGroupId || undefined });
+  await refresh();
 });
 
 $('addBtn').addEventListener('click', () => openEdit(null));
 
-function addDial(url, title) {
-  const href = normalizeUrl(url);
-  if (!href) return false;
-  state.items.push({ id: uid(), type: 'dial', title: (title || '').trim() || hostOf(href), url: href });
-  render();
-  save();
-  return true;
-}
-
 /* ------------------------------------------------------------- settings UI */
 $('settingsBtn').addEventListener('click', () => {
-  settingsForm.querySelector(`input[name=side][value="${state.settings.searchSide}"]`).checked = true;
-  $('fieldSearchUrl').value = state.settings.searchUrl;
-  $('fieldNewTab').checked = !!state.settings.openInNewTab;
+  settingsForm.querySelector(`input[name=side][value="${store.settings.searchSide}"]`).checked = true;
+  $('fieldSearchUrl').value = store.settings.searchUrl;
+  $('fieldNewTab').checked = !!store.settings.openInNewTab;
   settingsOverlay.hidden = false;
 });
 
-settingsForm.addEventListener('submit', (e) => {
+settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const side = settingsForm.querySelector('input[name=side]:checked').value;
   const url = normalizeUrl($('fieldSearchUrl').value) || DEFAULT_SEARCH_URL;
-  const urlChanged = url !== state.settings.searchUrl;
+  const urlChanged = url !== store.settings.searchUrl;
 
-  state.settings.searchSide = side;
-  state.settings.searchUrl = url;
-  state.settings.openInNewTab = $('fieldNewTab').checked;
+  await store.setSettings({
+    searchSide: settingsForm.querySelector('input[name=side]:checked').value,
+    searchUrl: url,
+    openInNewTab: $('fieldNewTab').checked
+  });
 
   settingsOverlay.hidden = true;
   applyLayout();
   if (urlChanged) applySearchUrl();
-  save();
 });
 
-$('resetLayoutBtn').addEventListener('click', () => {
-  state.settings.splitRatio = 0.5;
+$('resetLayoutBtn').addEventListener('click', async () => {
+  await store.setSettings({ splitRatio: 0.5 });
   applyLayout();
-  save();
 });
 
-$('swapBtn').addEventListener('click', () => {
-  state.settings.searchSide = state.settings.searchSide === 'left' ? 'right' : 'left';
-  state.settings.splitRatio = 1 - state.settings.splitRatio;  // keep each pane its own width
+$('swapBtn').addEventListener('click', async () => {
+  await store.setSettings({
+    searchSide: store.settings.searchSide === 'left' ? 'right' : 'left',
+    splitRatio: 1 - store.settings.splitRatio   // keep each pane its own width
+  });
   applyLayout();
-  save();
 });
 
 for (const btn of document.querySelectorAll('[data-close]')) {
@@ -586,7 +454,7 @@ for (const overlay of [editOverlay, settingsOverlay]) {
   });
 }
 
-/* ---------------------------------------------------------- context menu */
+/* ----------------------------------------------------------- context menu */
 function showCtxMenu(x, y, entries) {
   ctxMenu.replaceChildren(...entries.map(([label, fn, danger]) => {
     const b = document.createElement('button');
@@ -608,40 +476,34 @@ for (const grid of [dialGrid, groupGrid]) {
     const tile = e.target.closest('.tile');
     if (!tile) return;
     e.preventDefault();
-    const entry = locate(tile.dataset.id);
-    if (!entry) return;
-    const { item } = entry;
+    const item = find(tile.dataset.id);
+    if (!item) return;
 
     const entries = [];
     if (item.type === 'dial') {
       entries.push(['Open in new tab', () => window.open(item.url, '_blank', 'noreferrer')]);
       entries.push(['Edit…', () => openEdit(item.id)]);
       if (tile.dataset.container === 'group') {
-        entries.push(['Move out of group', () => {
-          const e2 = locate(item.id);
-          e2.list.splice(e2.index, 1);
-          state.items.push(item);
-          normalize();
-          render();
-          save();
+        entries.push(['Move out of group', async () => {
+          await store.moveTo(item.id, store.rootId);
+          await refresh();
         }]);
       }
     } else {
       entries.push(['Open group', () => openGroup(item.id)]);
-      entries.push(['Ungroup', () => {
-        const e2 = locate(item.id);
-        e2.list.splice(e2.index, 1, ...item.items);
-        render();
-        save();
-      }]);
+      entries.push(['Ungroup', async () => { await store.ungroup(item.id); await refresh(); }]);
     }
-    entries.push(['Remove', () => {
-      const e2 = locate(item.id);
-      e2.list.splice(e2.index, 1);
-      normalize();
-      render();
-      save();
-    }, true]);
+    entries.push([
+      item.type === 'group' ? 'Delete group and contents' : 'Remove',
+      async () => {
+        if (item.type === 'group' && item.items.length
+            && !confirm(`Delete "${item.title}" and its ${item.items.length} bookmarks?`)) return;
+        await store.remove(item.id);
+        if (openGroupId === item.id) closeGroup();
+        await refresh();
+      },
+      true
+    ]);
 
     showCtxMenu(e.clientX, e.clientY, entries);
   });
@@ -674,13 +536,14 @@ paneDials.addEventListener('dragover', (e) => {
 paneDials.addEventListener('dragleave', () => {
   if (--dropDepth <= 0) { dropDepth = 0; paneDials.classList.remove('drop-active'); }
 });
-paneDials.addEventListener('drop', (e) => {
+paneDials.addEventListener('drop', async (e) => {
   e.preventDefault();
   dropDepth = 0;
   paneDials.classList.remove('drop-active');
 
   const dt = e.dataTransfer;
-  const url = (dt.getData('text/uri-list') || dt.getData('text/plain') || '').split('\n')[0].trim();
+  const raw = (dt.getData('text/uri-list') || dt.getData('text/plain') || '').split('\n')[0];
+  const url = normalizeUrl(raw);
   if (!url) return;
 
   let title = '';
@@ -689,13 +552,21 @@ paneDials.addEventListener('drop', (e) => {
     const a = new DOMParser().parseFromString(html, 'text/html').querySelector('a');
     if (a) title = a.textContent.trim().slice(0, 40);
   }
-  addDial(url, title);
+  await store.addDial({ url, title });
+  await refresh();
 });
 
 /* -------------------------------------------------------------------- boot */
 (async function init() {
-  await loadState();
+  await store.init();
   applyLayout();
   applySearchUrl();
   render();
+
+  // Edits made in the bookmark manager show up here. Never mid-drag, though: re-rendering
+  // would destroy the tile the pointer has captured. The drop path refreshes anyway.
+  store.onChange(() => {
+    if (document.body.classList.contains('dragging')) return;
+    render();
+  });
 })();
