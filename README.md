@@ -33,8 +33,12 @@ Two things bookmarks cannot hold stay in `chrome.storage.local`: the pane layout
 ratio, search URL) and any custom icon URLs, which are keyed by bookmark id.
 
 **Deleting a tile deletes the bookmark.** Removing a group asks first, since that takes its
-contents with it. Nothing is ever deleted automatically — an emptied group stays put until you
-remove it yourself.
+contents with it.
+
+A group that drops to **one** item dissolves itself, the way a phone home screen folder does:
+the last bookmark moves back out to where the folder sat, and the empty folder is deleted. That
+check runs only straight after you move or remove something — never on a plain page load — so
+merely opening a new tab will not restructure a one-bookmark folder you made by hand.
 
 If you had dials from the pre-bookmark version, they are copied into the folder once, on first
 run, and the old copy is left untouched as a backup. If the extension has run under an earlier
@@ -48,10 +52,10 @@ your dials.
 | Add a shortcut | **+ Add**, or drag a link out of the search results onto the dial half |
 | Open a shortcut | Click it. Ctrl/Shift/middle-click opens a new tab |
 | Move a shortcut | Drag it to any slot in the grid |
-| Make a group | Drag one shortcut onto another — like dropping an app on an app |
-| Add to a group | Drag a shortcut onto the group tile |
+| Make a group | Drop one shortcut **onto another shortcut’s icon** — the icon lights up when it will merge |
+| Add to a group | Drop a shortcut onto the group tile’s icon |
 | Open a group | Click it. Click its name to rename |
-| Take one out | Open the group, drag the tile outside the box |
+| Take one out | Open the group, drag the tile outside the box. Down to one item, the group dissolves |
 | Edit / remove | Right-click a tile |
 | Move the search half | The **⇄** button, or Settings → Search pane side |
 | Resize the halves | Drag the divider; double-click it to reset to 50/50 |
@@ -104,8 +108,18 @@ opens, so the search box inside the frame is not focused. Click it, or type in t
 Dragging is built on pointer events rather than HTML5 drag-and-drop: the tile itself is moved
 around the grid as a live placeholder while a ghost clone follows the cursor. On drop, the DOM
 order is read back and translated into `chrome.bookmarks.move` calls. That is what lets a tile
-cross from the group folder back out to the main grid in one gesture. Dropping near the
-**centre** of another tile merges; dropping toward an **edge** reorders.
+cross from the group folder back out to the main grid in one gesture. Dropping on another
+tile's **icon** merges; dropping anywhere else on it reorders.
+
+Two things that are easy to get wrong here, both learned the hard way:
+
+- **No `setPointerCapture` on the dragged tile.** Chrome releases pointer capture as soon as a
+  captured element is reparented, and this engine reparents the dragged tile constantly. The
+  capture died on the first reorder, `pointerup` went elsewhere, and every drag leaked its
+  ghost onto the page. Document-level listeners survive reparenting; capture does not.
+- **Reorders need a settle delay.** Each one reflows the grid under a stationary cursor, which
+  can shove the tile you were aiming at out from under it and oscillate. A 120 ms floor between
+  reorders stops that, and the merge zone is the icon box so it never overlaps the reorder zone.
 
 Reordering places children one at a time in ascending index order. That converges whether the
 browser interprets a same-parent move index against the list with the node still in it or

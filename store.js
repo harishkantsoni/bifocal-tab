@@ -168,6 +168,36 @@ async function mergeInto(dragId, targetId) {
   await chrome.bookmarks.move(dragId, { parentId: folder.id, index: 1 });
 }
 
+/** Android-style: a folder that falls to one member stops being a folder. The last
+ *  bookmark moves back out to where the folder sat, and the empty folder is removed.
+ *
+ *  This runs only straight after one of our own mutations, never on a plain read, so
+ *  opening a new tab cannot quietly restructure a one-bookmark folder made by hand.
+ *  Deepest folders go first, so nesting unwinds from the inside out. */
+function firstThinFolder(node) {
+  for (const child of node.children || []) {
+    if (child.url) continue;
+    const deeper = firstThinFolder(child);
+    if (deeper) return deeper;
+    if ((child.children || []).length <= 1) return child;
+  }
+  return null;
+}
+
+async function dissolveThinGroups() {
+  for (let guard = 0; guard < 50; guard++) {
+    const [tree] = await chrome.bookmarks.getSubTree(rootId);
+    const thin = firstThinFolder(tree);
+    if (!thin) return;
+
+    const kids = thin.children || [];
+    if (kids.length === 1) {
+      await chrome.bookmarks.move(kids[0].id, { parentId: thin.parentId, index: thin.index });
+    }
+    await chrome.bookmarks.remove(thin.id);   // empty by now, so remove() is safe
+  }
+}
+
 export const store = {
   get items() { return items; },
   get settings() { return settings; },
@@ -235,6 +265,7 @@ export const store = {
     if (node.url) await chrome.bookmarks.remove(id);
     else await chrome.bookmarks.removeTree(id);
     if (icons[id]) await this.setIcon(id, null);
+    await dissolveThinGroups();
   },
 
   /** Spill a folder's children into its parent, then drop the empty folder. */
@@ -250,6 +281,7 @@ export const store = {
 
   async moveTo(id, parentId, index) {
     await chrome.bookmarks.move(id, index == null ? { parentId } : { parentId, index });
+    await dissolveThinGroups();
   },
 
   /** Translate the grid's post-drag DOM order into bookmark moves. */
@@ -260,6 +292,7 @@ export const store = {
     }
     if (groupId && groupIds) await placeAll(groupId, groupIds);
     await placeAll(rootId, rootIds);
+    await dissolveThinGroups();
   }
 };
 

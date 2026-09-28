@@ -194,7 +194,6 @@ body.resizing iframe, body.dragging iframe { pointer-events: none; }
 .group-title:hover { border-color: var(--line); }
 .group-title:focus { outline: none; border-color: var(--accent); }
 .group-grid { overflow-y: auto; min-height: 96px; }
-.group-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; font-size: 12px; }
 
 .modal {
   background: var(--bg-2); border: 1px solid var(--line); border-radius: 18px;

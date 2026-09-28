@@ -168,6 +168,10 @@ divider.addEventListener('keydown', async (e) => {
 });
 
 /* ------------------------------------------------------------ drag & drop */
+/* Deliberately no setPointerCapture. This engine moves the dragged tile around the grid as
+ * a live placeholder, and Chrome releases pointer capture the moment a captured element is
+ * reparented - which silently killed pointerup and leaked the ghost. Document-level
+ * listeners survive the reparenting instead. */
 let drag = null;
 
 function onTilePointerDown(e) {
@@ -182,17 +186,26 @@ function onTilePointerDown(e) {
     id: tile.dataset.id,
     item,
     container: tile.dataset.container,
+    pointerId: e.pointerId,
     startX: e.clientX,
     startY: e.clientY,
     started: false,
     mergeTargetId: null,
-    ghost: null
+    ghost: null,
+    lastReorder: 0
   };
 
-  tile.setPointerCapture(e.pointerId);
-  tile.addEventListener('pointermove', onTilePointerMove);
-  tile.addEventListener('pointerup', onTilePointerUp);
-  tile.addEventListener('pointercancel', onTilePointerUp);
+  document.addEventListener('pointermove', onPointerMove);
+  document.addEventListener('pointerup', onPointerUp);
+  document.addEventListener('pointercancel', onPointerUp);
+  window.addEventListener('blur', onWindowBlur);
+}
+
+function detachDragListeners() {
+  document.removeEventListener('pointermove', onPointerMove);
+  document.removeEventListener('pointerup', onPointerUp);
+  document.removeEventListener('pointercancel', onPointerUp);
+  window.removeEventListener('blur', onWindowBlur);
 }
 
 function beginDrag(e) {
@@ -219,28 +232,58 @@ function moveGhost(x, y) {
   drag.ghost.style.top = (y - drag.offsetY) + 'px';
 }
 
-function onTilePointerMove(e) {
-  if (!drag) return;
+function onPointerMove(e) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
 
   if (!drag.started) {
     if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < 6) return;
     beginDrag(e);
   }
-
   moveGhost(e.clientX, e.clientY);
+  updateDropTarget(e);
+}
 
-  // Dials can travel in and out of an open group; a group itself stays at the root.
-  let targetGrid = dialGrid;
+/** Dials can travel in and out of an open group; a group itself stays at the root. */
+function gridUnder(e) {
   if (openGroupId && !groupOverlay.hidden && drag.item.type === 'dial') {
     const r = groupPanel.getBoundingClientRect();
     if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
-      targetGrid = groupGrid;
+      return groupGrid;
     }
   }
+  return dialGrid;
+}
+
+/** Dropping on the target icon makes a group; anywhere else on the tile reorders.
+ *  Using the icon box rather than an abstract centre gives the gesture something visible
+ *  to aim at, and keeps the merge zone clear of the reorder zone. */
+function overIcon(tile, e) {
+  const icon = tile.querySelector('.tile-icon');
+  if (!icon) return false;
+  const r = icon.getBoundingClientRect();
+  const pad = 10;
+  return e.clientX >= r.left - pad && e.clientX <= r.right + pad
+      && e.clientY >= r.top - pad && e.clientY <= r.bottom + pad;
+}
+
+const REORDER_SETTLE_MS = 120;
+
+/* Each reorder reflows the grid under the pointer, which can shove the tile you were
+ * aiming at out from under the cursor. Letting the layout settle stops that oscillation. */
+function reorderTo(grid, ref) {
+  if (performance.now() - drag.lastReorder < REORDER_SETTLE_MS) return;
+  if (ref === drag.tile || ref === drag.tile.nextSibling) return;
+  grid.insertBefore(drag.tile, ref);
+  drag.lastReorder = performance.now();
+}
+
+function updateDropTarget(e) {
+  const targetGrid = gridUnder(e);
   if (drag.tile.parentElement !== targetGrid) {
     targetGrid.appendChild(drag.tile);
     drag.container = targetGrid === groupGrid ? 'group' : 'root';
     drag.tile.dataset.container = drag.container;
+    drag.lastReorder = performance.now();
   }
 
   clearMergeHighlight();
@@ -250,24 +293,17 @@ function onTilePointerMove(e) {
   const overTile = under && under.closest ? under.closest('.tile') : null;
 
   if (overTile && overTile !== drag.tile && overTile.parentElement === targetGrid) {
-    const r = overTile.getBoundingClientRect();
-    const nearCentre = Math.abs(e.clientX - (r.left + r.width / 2)) < r.width * 0.26
-                    && Math.abs(e.clientY - (r.top + r.height / 2)) < r.height * 0.28;
-
-    if (drag.container === 'root' && drag.item.type === 'dial' && nearCentre) {
+    if (drag.container === 'root' && drag.item.type === 'dial' && overIcon(overTile, e)) {
       drag.mergeTargetId = overTile.dataset.id;
       overTile.classList.add('merge-target');
       return;
     }
-    const before = e.clientX < r.left + r.width / 2;
-    targetGrid.insertBefore(drag.tile, before ? overTile : overTile.nextSibling);
+    const r = overTile.getBoundingClientRect();
+    reorderTo(targetGrid, e.clientX < r.left + r.width / 2 ? overTile : overTile.nextSibling);
     return;
   }
 
-  if (!overTile) {
-    const slot = insertionPoint(targetGrid, e.clientX, e.clientY);
-    if (slot !== drag.tile && slot !== drag.tile.nextSibling) targetGrid.insertBefore(drag.tile, slot);
-  }
+  if (!overTile) reorderTo(targetGrid, insertionPoint(targetGrid, e.clientX, e.clientY));
 }
 
 /** Nearest gap when the pointer sits between or past the tiles. */
@@ -284,27 +320,32 @@ function clearMergeHighlight() {
   for (const el of document.querySelectorAll('.tile.merge-target')) el.classList.remove('merge-target');
 }
 
+/** Sweep every ghost, not just the one this drag made, so a single missed release
+ *  cannot leave debris stranded on the page. */
+function cleanupDragVisuals() {
+  for (const g of document.querySelectorAll('.ghost')) g.remove();
+  for (const el of document.querySelectorAll('.tile.dragging')) el.classList.remove('dragging');
+  document.body.classList.remove('dragging');
+  clearMergeHighlight();
+}
+
 const idsIn = (grid) => [...grid.children]
   .filter((el) => el.classList.contains('tile'))
   .map((el) => el.dataset.id);
 
-async function onTilePointerUp(e) {
+async function onPointerUp(e) {
   if (!drag) return;
+  if (e.pointerId !== undefined && e.pointerId !== drag.pointerId) return;
   const d = drag;
-  d.tile.removeEventListener('pointermove', onTilePointerMove);
-  d.tile.removeEventListener('pointerup', onTilePointerUp);
-  d.tile.removeEventListener('pointercancel', onTilePointerUp);
   drag = null;
+  detachDragListeners();
 
   if (!d.started) {
     if (e.type === 'pointerup') activate(d.item, e);
     return;
   }
 
-  d.ghost.remove();
-  d.tile.classList.remove('dragging');
-  document.body.classList.remove('dragging');
-  clearMergeHighlight();
+  cleanupDragVisuals();
 
   await store.applyDrop({
     rootIds: idsIn(dialGrid),
@@ -314,6 +355,17 @@ async function onTilePointerUp(e) {
     mergeTargetId: d.mergeTargetId
   });
   await refresh();
+}
+
+/** Losing the window mid-drag abandons the gesture and re-reads the real order. */
+function onWindowBlur() {
+  if (!drag) return;
+  const started = drag.started;
+  drag = null;
+  detachDragListeners();
+  if (!started) return;
+  cleanupDragVisuals();
+  refresh();
 }
 
 dialGrid.addEventListener('pointerdown', onTilePointerDown);
@@ -366,13 +418,6 @@ groupTitle.addEventListener('input', () => {
   if (label) label.textContent = title;
   clearTimeout(renameTimer);
   renameTimer = setTimeout(() => store.rename(id, title), 400);
-});
-
-$('ungroupBtn').addEventListener('click', async () => {
-  const id = openGroupId;
-  closeGroup();
-  await store.ungroup(id);
-  await refresh();
 });
 
 /* --------------------------------------------------------- add / edit form */
