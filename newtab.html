@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New Tab</title>
+<link rel="stylesheet" href="newtab.css">
+</head>
+<body>
+  <main id="app" class="search-right">
+    <section id="paneSearch" class="pane pane-search">
+      <iframe id="searchFrame" title="Search" referrerpolicy="no-referrer"></iframe>
+      <a id="popOut" class="pop-out" target="_blank" rel="noreferrer"
+         title="Open this page in a full tab">&#8599;</a>
+      <div id="frameFallback" class="frame-notice" hidden>
+        <span>That page would not load in the frame.</span>
+        <a id="frameFallbackLink" target="_blank" rel="noreferrer">Open in a new tab</a>
+        <button id="frameNoticeClose" class="notice-close" title="Dismiss">&times;</button>
+      </div>
+    </section>
+
+    <div id="divider" class="divider" role="separator" aria-orientation="vertical" tabindex="0"
+         aria-label="Resize panes" title="Drag to resize · double-click to reset"><span></span></div>
+
+    <section id="paneDials" class="pane pane-dials">
+      <header class="dials-header">
+        <h1>Speed Dial</h1>
+        <div class="header-actions">
+          <button id="addBtn" class="btn" title="Add a shortcut">+ Add</button>
+          <button id="swapBtn" class="btn icon-btn" title="Swap sides">&#8646;</button>
+          <button id="settingsBtn" class="btn icon-btn" title="Settings">&#9881;</button>
+        </div>
+      </header>
+
+      <div id="dialScroll" class="dial-scroll">
+        <div id="dialGrid" class="grid" role="list"></div>
+        <p id="emptyHint" class="hint">
+          Nothing here yet. Hit <b>+ Add</b>, or drag a link from the search results and drop it on this half.<br>
+          Drop one tile on top of another to make a group.
+        </p>
+      </div>
+      <div id="dropOverlay" class="drop-overlay"><span>Drop to add a shortcut</span></div>
+    </section>
+  </main>
+
+  <!-- Group folder -->
+  <div id="groupOverlay" class="overlay" hidden>
+    <div id="groupPanel" class="group-panel" role="dialog" aria-label="Group">
+      <input id="groupTitle" class="group-title" type="text" maxlength="40" spellcheck="false" aria-label="Group name">
+      <div id="groupGrid" class="grid group-grid" role="list"></div>
+      <p class="group-foot">
+        <span class="muted">Drag a tile out of this box to move it back to the grid.</span>
+        <button id="ungroupBtn" class="btn ghost-btn">Ungroup</button>
+      </p>
+    </div>
+  </div>
+
+  <!-- Add / edit shortcut -->
+  <div id="editOverlay" class="overlay" hidden>
+    <form id="editForm" class="modal" role="dialog" aria-label="Shortcut">
+      <h2 id="editTitle">Add shortcut</h2>
+      <label>Address
+        <input id="fieldUrl" type="text" placeholder="example.com" spellcheck="false" autocomplete="off" required>
+      </label>
+      <label>Name <span class="muted">(optional)</span>
+        <input id="fieldName" type="text" placeholder="Taken from the address" maxlength="40" autocomplete="off">
+      </label>
+      <label>Icon URL <span class="muted">(optional)</span>
+        <input id="fieldIcon" type="text" placeholder="Leave empty to use the site favicon" spellcheck="false" autocomplete="off">
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost-btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary-btn">Save</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Settings -->
+  <div id="settingsOverlay" class="overlay" hidden>
+    <form id="settingsForm" class="modal" role="dialog" aria-label="Settings">
+      <h2>Settings</h2>
+      <fieldset>
+        <legend>Search pane side</legend>
+        <label class="radio"><input type="radio" name="side" value="left"> Left</label>
+        <label class="radio"><input type="radio" name="side" value="right"> Right <span class="muted">(default)</span></label>
+      </fieldset>
+      <label>Search page URL
+        <input id="fieldSearchUrl" type="text" spellcheck="false" autocomplete="off">
+      </label>
+      <p class="muted small"><code>?igu=1</code> is what lets Google render inside a frame &mdash; keep it unless you switch engines.</p>
+      <label class="check"><input id="fieldNewTab" type="checkbox"> Open shortcuts in a new tab</label>
+      <div class="modal-actions">
+        <button type="button" id="resetLayoutBtn" class="btn ghost-btn">Reset split</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn ghost-btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary-btn">Save</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="ctxMenu" class="ctx-menu" hidden></div>
+
+  <script src="newtab.js"></script>
+</body>
+</html>
