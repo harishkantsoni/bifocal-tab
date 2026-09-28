@@ -13,7 +13,8 @@
       <a id="popOut" class="pop-out" target="_blank" rel="noreferrer"
          title="Open this page in a full tab">&#8599;</a>
       <div id="frameFallback" class="frame-notice" hidden>
-        <span>That page would not load in the frame.</span>
+        <span id="frameNoticeText">That page would not load in the frame.</span>
+        <button id="frameGrantBtn" class="btn notice-grant" hidden>Grant access</button>
         <a id="frameFallbackLink" target="_blank" rel="noreferrer">Open in a new tab</a>
         <button id="frameNoticeClose" class="notice-close" title="Dismiss">&times;</button>
       </div>
@@ -79,10 +80,34 @@
         <label class="radio"><input type="radio" name="side" value="left"> Left</label>
         <label class="radio"><input type="radio" name="side" value="right"> Right <span class="muted">(default)</span></label>
       </fieldset>
-      <label>Search page URL
-        <input id="fieldSearchUrl" type="text" spellcheck="false" autocomplete="off">
+      <label>Search engine
+        <span class="engine-row">
+          <select id="fieldEngine"></select>
+          <button type="button" id="removeEngineBtn" class="btn ghost-btn" hidden>Remove</button>
+        </span>
       </label>
-      <p class="muted small"><code>?igu=1</code> is what lets Google render inside a frame &mdash; keep it unless you switch engines.</p>
+
+      <div id="engineAdd" class="engine-add" hidden>
+        <label>Name
+          <input id="fieldEngineName" type="text" maxlength="40" autocomplete="off"
+                 placeholder="Mojeek">
+        </label>
+        <label>Page address
+          <input id="fieldEngineUrl" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="https://www.mojeek.com/">
+        </label>
+        <p class="muted small">
+          The engine&rsquo;s own page. Chrome will ask for access to that site so its
+          frame-blocking headers can be stripped.
+        </p>
+        <p id="engineError" class="engine-error" hidden></p>
+        <div class="engine-add-actions">
+          <button type="button" id="engineAddCancel" class="btn ghost-btn">Cancel</button>
+          <button type="button" id="engineAddSave" class="btn">Add engine</button>
+        </div>
+      </div>
+
+      <p id="engineNote" class="engine-error" hidden></p>
       <label class="check"><input id="fieldNewTab" type="checkbox"> Open shortcuts in a new tab</label>
       <div class="modal-actions">
         <button type="button" id="flipSidesBtn" class="btn ghost-btn" title="Swap the two halves">Flip split</button>

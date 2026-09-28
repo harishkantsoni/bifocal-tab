@@ -10,12 +10,44 @@ export const ROOT_TITLE = 'Bifocal Tab';
 /* Folder titles this extension has shipped under. An existing folder is retitled in
  * place rather than abandoned, so a rename never orphans somebody's dials. */
 const LEGACY_TITLES = ['Minimal New Tab', 'Focus New Tab'];
-export const DEFAULT_SEARCH_URL = 'https://www.google.com/webhp?igu=1';
+/* Search engines.
+ *
+ * `url` is the engine's own page, loaded straight into the frame — there is no search box
+ * of our own anywhere in this extension.
+ *
+ * Every engine except Google refuses to be framed (measured: Bing, Brave and DuckDuckGo
+ * answer X-Frame-Options: SAMEORIGIN, Yahoo answers DENY, and most add frame-ancestors on
+ * top). `rules.json` strips those headers, but only on domains the user has actually
+ * granted: the manifest asks for declarativeNetRequestWithHostAccess, so a rule whose
+ * domain has no host permission simply never fires. Google ships as a granted origin
+ * because it is the default; the rest are requested the moment they are chosen. */
+/* `origin` is stated rather than derived: several of these search from a subdomain, and
+ * the permission has to line up with the registrable domain the ruleset keys on. */
+export const ENGINES = [
+  { id: 'google',     name: 'Google',       url: 'https://www.google.com/webhp?igu=1', origin: '*://*.google.com/*' },
+  { id: 'bing',       name: 'Bing',         url: 'https://www.bing.com/',              origin: '*://*.bing.com/*' },
+  { id: 'duckduckgo', name: 'DuckDuckGo',   url: 'https://duckduckgo.com/',            origin: '*://*.duckduckgo.com/*' },
+  { id: 'yahoo',      name: 'Yahoo',        url: 'https://search.yahoo.com/',          origin: '*://*.yahoo.com/*' },
+  { id: 'brave',      name: 'Brave Search', url: 'https://search.brave.com/',          origin: '*://*.brave.com/*' }
+];
+
+export const CUSTOM_PREFIX = 'custom:';
+export const isCustomEngine = (id) => String(id || '').startsWith(CUSTOM_PREFIX);
+
+/* Dynamic rules start well clear of the static ruleset's ids. */
+const CUSTOM_RULE_BASE = 1000;
+const STRIP_HEADERS = [
+  { header: 'x-frame-options', operation: 'remove' },
+  { header: 'frame-options', operation: 'remove' },
+  { header: 'content-security-policy', operation: 'remove' },
+  { header: 'content-security-policy-report-only', operation: 'remove' }
+];
 
 const DEFAULT_SETTINGS = {
   searchSide: 'right',
   splitRatio: 0.5,
-  searchUrl: DEFAULT_SEARCH_URL,
+  engineId: 'google',
+  customEngines: [],      // { id, name, url }
   openInNewTab: false
 };
 
@@ -58,6 +90,54 @@ const changeListeners = new Set();
 /* ------------------------------------------------------------------ helpers */
 export function hostOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url || ''; }
+}
+
+/* Built-ins first, then whatever the user added. */
+export function allEngines() {
+  return [...ENGINES, ...(settings.customEngines || [])];
+}
+
+export function engineById(id) {
+  return allEngines().find((e) => e.id === id) || ENGINES[0];
+}
+
+/* The host permission an engine needs before its framing headers can be stripped.
+ * Built-ins carry theirs; a custom engine gets its own host and anything under it. */
+export function originOf(engine) {
+  if (engine.origin) return engine.origin;
+  try { return `*://*.${new URL(engine.url).hostname}/*`; } catch { return null; }
+}
+
+export const hasAccess = (engine) =>
+  chrome.permissions.contains({ origins: [originOf(engine)] });
+
+/* Must be called straight from a click or change handler; Chrome refuses a permission
+ * request that is not attached to a user gesture. */
+export const requestAccess = (engine) =>
+  chrome.permissions.request({ origins: [originOf(engine)] });
+
+/* A usable engine page is just an http(s) address. */
+export function validateEngineUrl(raw) {
+  const url = normalizeUrl(raw);
+  if (!url) return { error: 'That is not a valid address.' };
+  if (!/^https?:$/.test(new URL(url).protocol)) return { error: 'Use an http or https address.' };
+  return { url };
+}
+
+/* The static ruleset names the built-in engines. Anything the user adds needs a rule of
+ * its own, rewritten as a set so a removed engine never leaves its rule behind. */
+async function syncCustomRules() {
+  const customs = settings.customEngines || [];
+  const existing = await chrome.declarativeNetRequest.getDynamicRules();
+  await chrome.declarativeNetRequest.updateDynamicRules({
+    removeRuleIds: existing.map((r) => r.id),
+    addRules: customs.map((e, i) => ({
+      id: CUSTOM_RULE_BASE + i,
+      priority: 1,
+      action: { type: 'modifyHeaders', responseHeaders: STRIP_HEADERS },
+      condition: { requestDomains: [new URL(e.url).hostname], resourceTypes: ['sub_frame'] }
+    }))
+  });
 }
 
 export function normalizeUrl(raw) {
@@ -283,9 +363,27 @@ export const store = {
 
   async init() {
     const saved = await chrome.storage.local.get([
-      'settings', 'icons', 'groupSizes', 'state', 'migrated', 'seeded'
+      'settings', 'icons', 'groupSizes', 'state', 'migrated', 'seeded', 'engineMigrated'
     ]);
     settings = { ...DEFAULT_SETTINGS, ...(saved.settings || {}) };
+
+    /* Installs from before the engine picker stored the frame's page as `searchUrl`.
+     * That is exactly what an engine is now, so anything that was not the old Google
+     * default carries straight over as a custom engine and stays selected. Once only. */
+    if (!saved.engineMigrated) {
+      const legacy = (saved.settings || {}).searchUrl;
+      if (legacy && !legacy.startsWith('https://www.google.com/webhp')) {
+        const id = CUSTOM_PREFIX + Date.now();
+        settings.customEngines = [
+          ...(settings.customEngines || []),
+          { id, name: hostOf(legacy) || 'Custom', url: legacy }
+        ];
+        settings.engineId = id;
+      }
+      delete settings.searchUrl;
+      await chrome.storage.local.set({ settings, engineMigrated: true });
+      await syncCustomRules();
+    }
     icons = saved.icons || {};
     groupSizes = saved.groupSizes || {};
 
@@ -320,6 +418,28 @@ export const store = {
   async setSettings(patch) {
     settings = { ...settings, ...patch };
     await chrome.storage.local.set({ settings });
+  },
+
+  async addCustomEngine({ name, url }) {
+    // Date.now() alone collides if two are added inside the same millisecond.
+    const taken = new Set((settings.customEngines || []).map((e) => e.id));
+    let id = CUSTOM_PREFIX + Date.now();
+    while (taken.has(id)) id += '-1';
+    const engine = { id, name: name.trim().slice(0, 40), url };
+    await this.setSettings({ customEngines: [...(settings.customEngines || []), engine] });
+    await syncCustomRules();
+    return engine;
+  },
+
+  /* Removing the engine in use falls back to the first built-in rather than leaving
+   * `engineId` pointing at something that is gone. */
+  async removeCustomEngine(id) {
+    const left = (settings.customEngines || []).filter((e) => e.id !== id);
+    await this.setSettings({
+      customEngines: left,
+      ...(settings.engineId === id ? { engineId: ENGINES[0].id } : {})
+    });
+    await syncCustomRules();
   },
 
   async addDial({ url, title, icon, parentId }) {

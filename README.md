@@ -1,7 +1,8 @@
 # Bifocal Tab
 
-A Chrome/Edge extension that replaces the new tab page with two vertical halves: Google search
-in one, a drag-and-drop speed dial grid in the other. The dials are stored as real bookmarks.
+A Chrome/Edge extension that replaces the new tab page with two vertical halves: a search
+engine's own page in one, a drag-and-drop speed dial grid in the other. The dials are stored
+as real bookmarks.
 
 ## Install
 
@@ -57,49 +58,163 @@ your dials.
 | Open a group | Click it. Click its name to rename |
 | Take one out | Open the group, drag the tile outside the box. Down to one item, the group dissolves |
 | Edit / remove | Right-click a tile |
+| Search | Use the engine's own box, in the search half |
+| Change engine | Settings → Search engine |
+| Add your own engine | Settings → Search engine → **+ Add a search engine…** |
 | Move the search half | The **⇄** button, or Settings → Search pane side |
 | Resize the halves | Drag the divider; double-click it to reset to 50/50 |
 
 Search sits on the **right** by default.
 
-## How Google gets into the frame
+## Search engines
 
-Google sends `X-Frame-Options` on its normal pages, which blocks embedding, so two things are
-in play:
+Settings → **Search engine** picks which engine's page fills the search half. Five are built
+in: Google, Bing, DuckDuckGo, Yahoo and Brave Search. There is no search box of this
+extension's own anywhere — the pane *is* the engine's site, with its own box, its own
+suggestions and its own results.
 
-- The frame loads `https://www.google.com/webhp?igu=1`. The `igu=1` parameter is Google's own
-  frame-friendly mode and does the work in most cases.
-- `rules.json` is a `declarativeNetRequest` ruleset that strips `X-Frame-Options` and
-  `Content-Security-Policy` from **sub-frame** responses on `google.com`. Host permissions are
-  limited to `*://*.google.com/*`, so nothing else is touched.
+**+ Add a search engine…** at the bottom of the list takes a name and the address of any page
+you want framed. Added engines sit under **Yours**, and a **Remove** button appears whenever
+one is selected. Removing the engine in use falls back to Google rather than leaving the
+setting pointing at nothing.
 
-If the frame ever comes up blank, hover the search half and use the **↗** button in its bottom
-corner to open the page in a full tab, or point Settings → Search page URL at another engine
-(DuckDuckGo and Bing both frame cleanly). There is deliberately no "it failed" timer: a slow
-frame is not a blocked one, and the browser reports an `X-Frame-Options` block as a `load` event
-rather than an `error`, so any timeout-based guess produces false alarms.
+## Why Chrome asks for permission when you switch
+
+Engines block framing, and they all do it differently. Measured response headers:
+
+| Engine | Framing header |
+| --- | --- |
+| `google.com/webhp?igu=1` | none |
+| Bing | `X-Frame-Options: SAMEORIGIN` |
+| DuckDuckGo | `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'` |
+| Yahoo | `X-Frame-Options: DENY`, `frame-ancestors 'none'` |
+| Brave, Startpage, Ecosia | `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'` |
+
+So showing an engine's page means stripping those headers for that site, and stripping headers
+for a site means holding a host permission for it. Rather than ask for all five up front, only
+Google — the default — is granted at install. Choosing any other engine triggers Chrome's own
+permission prompt for that one site, and adding a custom engine prompts for its site. Decline
+and nothing changes: the dropdown snaps back and says so.
+
+If an engine was somehow saved without access — or access is later withdrawn from
+`chrome://extensions` — the frame half says so and offers a **Grant access** button.
+That button exists because re-picking the engine already showing in the dropdown fires no
+`change` event, so there would otherwise be no gesture left to ask with.
+
+One implementation note worth keeping: `chrome.permissions.request()` must be *called*
+synchronously inside the click or change handler. Awaiting anything first — even a
+`permissions.contains()` check to avoid a redundant prompt — spends the user activation, and
+the call then throws instead of prompting. There is no pre-check for exactly that reason, and
+none is needed: an origin that is already granted resolves `true` without showing a prompt.
+
+`rules.json` is a `declarativeNetRequest` ruleset naming the five built-in domains, and each
+custom engine gets a dynamic rule of its own. Both strip `X-Frame-Options` and
+`Content-Security-Policy` from **sub-frame** responses only. Because the manifest asks for
+`declarativeNetRequestWithHostAccess` rather than plain `declarativeNetRequest`, a rule whose
+domain has not been granted never fires — the ruleset cannot reach further than the
+permissions you have actually approved.
+
+Two things worth knowing. Stripping a site's CSP removes more than its framing rule, which is
+a real reduction in that page's own defences — it is the price of embedding a site that does
+not want to be embedded. And headers are not the only defence: an engine that busts frames in
+JavaScript, or simply serves a degraded page to an embedded client, will still do so. If a
+frame comes up blank or broken, hover the half and use the **↗** button in its bottom corner
+to open the engine in a full tab.
+
+There is deliberately no "it failed" timer: a slow frame is not a blocked one, and the browser
+reports an `X-Frame-Options` block as a `load` event rather than an `error`, so any
+timeout-based guess produces false alarms.
 
 One thing no extension can fix: the browser puts the caret in the address bar when a new tab
 opens, so the search box inside the frame is not focused. Click it, or type in the address bar.
+
+## Using it
+
+| Action | How |
+| --- | --- |
+| Add a shortcut | **+ Add**, or drag a link out of the search results onto the dial half |
+| Open a shortcut | Click it. Ctrl/Shift/middle-click opens a new tab |
+| Move a shortcut | Drag it to any slot in the grid |
+| Make a group | Drop one shortcut **onto another shortcut’s icon** — the icon lights up when it will merge |
+| Add to a group | Drop a shortcut onto the group tile’s icon |
+| Open a group | Click it. Click its name to rename |
+| Take one out | Open the group, drag the tile outside the box. Down to one item, the group dissolves |
+| Edit / remove | Right-click a tile |
+| Search | Use the engine's own box, in the search half |
+| Change engine | Settings → Search engine |
+| Add your own engine | Settings → Search engine → **+ Add a search engine…** |
+| Move the search half | The **⇄** button, or Settings → Search pane side |
+| Resize the halves | Drag the divider; double-click it to reset to 50/50 |
+
+Search sits on the **right** by default.
+
+## Search engines
+
+Settings → **Search engine** picks the engine the box submits to. Five are built in:
+
+| Engine | Query URL |
+| --- | --- |
+| Google | `https://www.google.com/search?q=%s` |
+| Bing | `https://www.bing.com/search?q=%s` |
+| DuckDuckGo | `https://duckduckgo.com/?q=%s` |
+| Yahoo | `https://search.yahoo.com/search?p=%s` |
+| Brave Search | `https://search.brave.com/search?q=%s` |
+
+**+ Add a search engine…** at the bottom of the list takes a name and a query URL with `%s`
+where the query goes — the same token `chrome://settings/searchEngines` uses, so a URL copied
+from there works unchanged. Added engines sit under **Yours** in the dropdown, and a **Remove**
+button appears whenever one of them is selected. Removing the engine currently in use falls
+back to Google rather than leaving the setting pointing at nothing.
+
+Enter searches in the current tab; Ctrl/Cmd/Shift+Enter searches in a new one.
+
+## Why only Google appears in the frame
+
+Only Google gets a page in the pane under the search box. That is not a preference — it is
+what the engines allow. Measured response headers:
+
+| Engine | Framing header |
+| --- | --- |
+| `google.com/webhp?igu=1` | none |
+| Bing | `X-Frame-Options: SAMEORIGIN` |
+| DuckDuckGo | `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'` |
+| Yahoo | `X-Frame-Options: DENY`, `frame-ancestors 'none'` |
+| Brave, Startpage, Ecosia | `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'` |
+
+`rules.json` is a `declarativeNetRequest` ruleset that strips `X-Frame-Options` and
+`Content-Security-Policy` from **sub-frame** responses on `google.com`, which is what lets
+`webhp?igu=1` render. Host permissions are limited to `*://*.google.com/*`, so nothing else is
+touched, and the rule is not extended to cover the other engines — that would mean stripping
+security headers across five more domains to win a preview nobody asked for.
+
+So an engine with no framable page shows the search box centred in its half, with no frame
+loaded at all. If Google's frame ever comes up blank, hover the half and use the **↗** button
+in its bottom corner. There is deliberately no "it failed" timer: a slow frame is not a blocked
+one, and the browser reports an `X-Frame-Options` block as a `load` event rather than an
+`error`, so any timeout-based guess produces false alarms.
+
+One thing no extension can fix reliably: the browser usually puts the caret in the address bar
+when a new tab opens. The box asks for focus, but the omnibox often wins.
 
 ## Permissions
 
 | Permission | Why |
 | --- | --- |
 | `bookmarks` | The dial grid *is* a bookmark folder |
-| `storage` | Pane layout and custom icon URLs |
+| `storage` | Pane layout, chosen and custom search engines, custom icon URLs |
 | `favicon` | Tile icons from the browser's own favicon cache — no external requests |
-| `declarativeNetRequestWithHostAccess` + `*://*.google.com/*` | Strip frame-blocking headers on google.com sub-frames only |
+| `declarativeNetRequestWithHostAccess` + `*://*.google.com/*` | Strip frame-blocking headers on sub-frames, so the chosen engine renders. Google is granted at install as the default |
+| `optional_host_permissions` | Requested one site at a time, only when you pick another engine or add your own |
 
 ## Files
 
 | File | Role |
 | --- | --- |
 | `manifest.json` | MV3 manifest, new tab override, permissions |
-| `rules.json` | Header-stripping rules that let Google render in a frame |
+| `rules.json` | Header-stripping rules that let the chosen engine render in a frame |
 | `newtab.html` | Page structure: two panes, group folder, modals |
 | `newtab.css` | Layout, tiles, overlays, light and dark themes |
-| `store.js` | Bookmark tree ↔ dial model, settings, live change events |
+| `store.js` | Bookmark tree ↔ dial model, search engines, permissions, settings, live change events |
 | `newtab.js` | Rendering, the pointer drag engine, menus and modals |
 | `icons/` | Toolbar and store icons |
 

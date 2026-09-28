@@ -241,3 +241,26 @@ code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 1
    so a dial can be pulled out of an open group. */
 body.dragging .overlay { pointer-events: none; }
 body.dragging .group-panel { pointer-events: auto; }
+
+/* ---------- engine picker ---------- */
+.engine-row { display: flex; gap: 8px; align-items: center; }
+#fieldEngine {
+  flex: 1 1 auto; min-width: 0;
+  padding: 8px 10px; font: inherit; color: var(--fg);
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 9px;
+}
+#fieldEngine:focus { outline: none; border-color: var(--accent); }
+#removeEngineBtn[hidden] { display: none; }
+
+.engine-add {
+  display: grid; gap: 8px; margin-top: 4px;
+  padding: 12px; border-radius: 10px;
+  background: var(--bg); border: 1px solid var(--line);
+}
+.engine-add[hidden] { display: none; }
+.engine-add-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.engine-error { margin: 0; font-size: 12px; color: #ff6b6b; }
+.engine-error[hidden] { display: none; }
+
+.notice-grant { padding: 4px 10px; font-size: 12px; white-space: nowrap; }
+.notice-grant[hidden] { display: none; }

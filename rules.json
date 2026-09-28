@@ -5,15 +5,35 @@
     "action": {
       "type": "modifyHeaders",
       "responseHeaders": [
-        { "header": "x-frame-options", "operation": "remove" },
-        { "header": "frame-options", "operation": "remove" },
-        { "header": "content-security-policy", "operation": "remove" },
-        { "header": "content-security-policy-report-only", "operation": "remove" }
+        {
+          "header": "x-frame-options",
+          "operation": "remove"
+        },
+        {
+          "header": "frame-options",
+          "operation": "remove"
+        },
+        {
+          "header": "content-security-policy",
+          "operation": "remove"
+        },
+        {
+          "header": "content-security-policy-report-only",
+          "operation": "remove"
+        }
       ]
     },
     "condition": {
-      "urlFilter": "||google.com",
-      "resourceTypes": ["sub_frame"]
+      "requestDomains": [
+        "google.com",
+        "bing.com",
+        "duckduckgo.com",
+        "yahoo.com",
+        "brave.com"
+      ],
+      "resourceTypes": [
+        "sub_frame"
+      ]
     }
   }
 ]

@@ -1,7 +1,11 @@
 /* Bifocal Tab — split new tab page with search on one half and bookmark-backed
  * speed dials on the other. */
 
-import { store, find, hostOf, normalizeUrl, DEFAULT_SEARCH_URL } from './store.js';
+import {
+  store, find, hostOf, normalizeUrl,
+  ENGINES, allEngines, engineById, validateEngineUrl, isCustomEngine,
+  hasAccess, requestAccess
+} from './store.js';
 
 let openGroupId = null;
 
@@ -10,6 +14,13 @@ const $ = (id) => document.getElementById(id);
 const app = $('app');
 const searchFrame = $('searchFrame');
 const frameFallback = $('frameFallback');
+const frameNoticeText = $('frameNoticeText');
+const frameGrantBtn = $('frameGrantBtn');
+const fieldEngine = $('fieldEngine');
+const engineAdd = $('engineAdd');
+const engineError = $('engineError');
+const engineNote = $('engineNote');
+const removeEngineBtn = $('removeEngineBtn');
 const frameFallbackLink = $('frameFallbackLink');
 const popOut = $('popOut');
 const divider = $('divider');
@@ -113,21 +124,44 @@ function applyLayout() {
   app.style.setProperty('--split', (splitRatio * 100).toFixed(2) + '%');
 }
 
-function applySearchUrl() {
-  const url = store.settings.searchUrl || DEFAULT_SEARCH_URL;
+/* ------------------------------------------------------------------ engine */
+const ADD_OPTION = '__add';
+
+function currentEngine() {
+  return engineById(store.settings.engineId);
+}
+
+/* The engine's own page goes straight into the frame. Nothing is rehosted or rebuilt —
+ * the pane is the engine's site, which is why the framing headers have to come off. */
+async function applyEngine() {
+  const engine = currentEngine();
+  const { url } = engine;
   frameFallbackLink.href = url;
   popOut.href = url;
   frameFallback.hidden = true;
   searchFrame.src = url;
+
+  /* Access can also be taken away from chrome://extensions long after it was granted,
+   * which leaves the ruleset inert and the frame blocked with nothing to explain it. */
+  const ok = await hasAccess(engine);
+  frameGrantBtn.hidden = ok;
+  if (!ok) {
+    frameNoticeText.textContent =
+      `${engine.name} blocks embedding, and this extension does not have access to its site.`;
+    frameFallback.hidden = false;
+  }
 }
 
-// A frame that is merely slow must not be accused of refusing to load, so there is no
-// timeout here. Chrome fires `error` when the navigation itself fails; an X-Frame-Options
-// block fires `load` on an error document instead, which is why the pop-out button is
-// always available rather than gated on detection.
-searchFrame.addEventListener('load', () => { frameFallback.hidden = true; });
-searchFrame.addEventListener('error', () => { frameFallback.hidden = false; });
-$('frameNoticeClose').addEventListener('click', () => { frameFallback.hidden = true; });
+/* The only way back for an engine that was saved without access: re-picking the same
+ * option in the dropdown fires no change event, so there would otherwise be nothing left
+ * to ask with. This click is its own user gesture, so the request can go out directly. */
+frameGrantBtn.addEventListener('click', () => {
+  const engine = currentEngine();
+  requestAccess(engine).then(
+    (granted) => { if (granted) applyEngine(); },
+    (err) => { frameNoticeText.textContent = `Could not get access: ${err.message}`; }
+  );
+});
 
 /* --------------------------------------------------------- divider resize */
 divider.addEventListener('pointerdown', (e) => {
@@ -454,31 +488,162 @@ editForm.addEventListener('submit', async (e) => {
 $('addBtn').addEventListener('click', () => openEdit(null));
 
 /* ------------------------------------------------------------- settings UI */
+/* Built-ins, then the user's own, then the row that opens the add form. Rebuilt rather
+ * than patched so adding and removing never leave a stale option behind. */
+function buildEngineOptions(selectedId) {
+  const custom = store.settings.customEngines || [];
+  const group = (label, list) => {
+    const g = document.createElement('optgroup');
+    g.label = label;
+    for (const e of list) {
+      const o = document.createElement('option');
+      o.value = e.id;
+      o.textContent = e.name;
+      g.append(o);
+    }
+    return g;
+  };
+
+  const add = document.createElement('option');
+  add.value = ADD_OPTION;
+  add.textContent = '+ Add a search engine…';
+
+  fieldEngine.replaceChildren(
+    group('Built in', ENGINES),
+    ...(custom.length ? [group('Yours', custom)] : []),
+    add
+  );
+  fieldEngine.value = allEngines().some((e) => e.id === selectedId) ? selectedId : ENGINES[0].id;
+  removeEngineBtn.hidden = !isCustomEngine(fieldEngine.value);
+}
+
+function closeEngineAdd() {
+  engineAdd.hidden = true;
+  engineError.hidden = true;
+  $('fieldEngineName').value = '';
+  $('fieldEngineUrl').value = '';
+}
+
 $('settingsBtn').addEventListener('click', () => {
   settingsForm.querySelector(`input[name=side][value="${store.settings.searchSide}"]`).checked = true;
-  $('fieldSearchUrl').value = store.settings.searchUrl;
+  buildEngineOptions(store.settings.engineId);
+  closeEngineAdd();
+  showNote('');
   $('fieldNewTab').checked = !!store.settings.openInNewTab;
   settingsOverlay.hidden = false;
 });
 
+function showNote(text) {
+  engineNote.textContent = text;
+  engineNote.hidden = !text;
+}
+
+/* An engine is only selectable once Chrome has granted access to its site, since the
+ * ruleset that unblocks framing does nothing without it. The request has to ride this
+ * change event directly — awaiting anything first would lose the user gesture. */
+/* Not an async handler, and nothing is awaited before requestAccess(): chrome.permissions
+ * .request() needs the user activation carried by this change event, and the first await
+ * spends it — the call then throws instead of prompting. There is no has-it-already check
+ * for the same reason, and none is needed: an origin that is already granted resolves
+ * true without showing a prompt. */
+fieldEngine.addEventListener('change', () => {
+  showNote('');
+  if (fieldEngine.value === ADD_OPTION) {
+    engineAdd.hidden = false;
+    removeEngineBtn.hidden = true;
+    $('fieldEngineName').focus();
+    return;
+  }
+  closeEngineAdd();
+
+  const engine = engineById(fieldEngine.value);
+  const decline = (msg) => {
+    // Put the select back rather than leave it showing an engine that could only ever
+    // render a blocked frame.
+    buildEngineOptions(store.settings.engineId);
+    showNote(msg);
+  };
+
+  requestAccess(engine).then(
+    (granted) => {
+      if (!granted) return decline(`${engine.name} needs access to its own site to load here. Nothing changed.`);
+      removeEngineBtn.hidden = !isCustomEngine(engine.id);
+    },
+    (err) => decline(`Could not get access to ${engine.name}: ${err.message}`)
+  );
+});
+
+$('engineAddCancel').addEventListener('click', () => {
+  closeEngineAdd();
+  // The select is still sitting on "+ Add", so put it back on the live engine.
+  buildEngineOptions(store.settings.engineId);
+});
+
+// These inputs sit inside the settings form, so a bare Enter would save settings and
+// close the modal with the half-typed engine thrown away. Add it instead.
+for (const id of ['fieldEngineName', 'fieldEngineUrl']) {
+  $(id).addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    addEngine();
+  });
+}
+
+$('engineAddSave').addEventListener('click', addEngine);
+
+async function addEngine() {
+  const name = $('fieldEngineName').value.trim();
+  const { url, error } = validateEngineUrl($('fieldEngineUrl').value);
+  const problem = !name ? 'Give the engine a name.' : error;
+  if (problem) {
+    engineError.textContent = problem;
+    engineError.hidden = false;
+    return;
+  }
+
+  // Ask before storing anything, so a declined prompt does not leave an engine in the
+  // list that could never load. Reached with no await behind it, so the gesture is intact.
+  let granted = false;
+  try { granted = await requestAccess({ url }); } catch { granted = false; }
+  if (!granted) {
+    engineError.textContent = 'Access to that site is needed before it can be framed.';
+    engineError.hidden = false;
+    return;
+  }
+
+  const engine = await store.addCustomEngine({ name, url });
+  closeEngineAdd();
+  buildEngineOptions(engine.id);   // added engines are selected, saved on Save
+}
+
+removeEngineBtn.addEventListener('click', async () => {
+  const id = fieldEngine.value;
+  if (!isCustomEngine(id)) return;
+  await store.removeCustomEngine(id);
+  buildEngineOptions(store.settings.engineId);
+  applyEngine();
+});
+
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const url = normalizeUrl($('fieldSearchUrl').value) || DEFAULT_SEARCH_URL;
-  const urlChanged = url !== store.settings.searchUrl;
+  // A select left sitting on "+ Add" is not an engine; keep whatever was in use.
+  const engineId = fieldEngine.value === ADD_OPTION ? store.settings.engineId : fieldEngine.value;
+  const engineChanged = engineId !== store.settings.engineId;
   const side = settingsForm.querySelector('input[name=side]:checked').value;
   const sideChanged = side !== store.settings.searchSide;
 
   await store.setSettings({
     searchSide: side,
-    searchUrl: url,
+    engineId,
     openInNewTab: $('fieldNewTab').checked,
     // swapping sides keeps each pane the width it had
     ...(sideChanged ? { splitRatio: 1 - store.settings.splitRatio } : {})
   });
 
   settingsOverlay.hidden = true;
+  closeEngineAdd();
   applyLayout();
-  if (urlChanged) applySearchUrl();
+  if (engineChanged) applyEngine();
 });
 
 $('flipSidesBtn').addEventListener('click', async () => {
@@ -605,7 +770,7 @@ paneDials.addEventListener('drop', async (e) => {
 (async function init() {
   await store.init();
   applyLayout();
-  applySearchUrl();
+  applyEngine();
   render();
 
   // Edits made in the bookmark manager show up here. Never mid-drag, though: re-rendering
