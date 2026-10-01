@@ -1,6 +1,6 @@
 # Privacy Policy — Bifocal Tab
 
-**Last updated: 29 September 2026**
+**Last updated: 1 October 2026**
 
 Bifocal Tab is a browser extension that replaces the new tab page. It has no server, no
 account, and no analytics. Nothing you do in it is sent to the developer, because there is
@@ -46,17 +46,31 @@ both go to sites you chose:
   would in any other tab, and that engine's own privacy policy applies to it. The extension
   does not read the frame's contents, inject scripts into it, or observe what you type or
   search for.
+
+  Because the pane is the engine's real page and not a stripped-down copy, **you may be signed
+  in inside it**, and searches you run there may be associated with that account by the engine,
+  exactly as they would be in a normal tab. The pane is a third-party frame, so the engine
+  receives only the cookies a third-party frame is allowed — which is usually enough for your
+  avatar to appear. If your browser blocks third-party cookies, the engine will serve you its
+  signed-out page instead. Either way this is a matter between you and the engine: the
+  extension neither sends nor reads those cookies, and cannot see which of the two you got.
 - **Clicking a result** opens it in a normal tab rather than inside the pane, because most
   sites refuse to be framed at all. See *Browsing history* below for how the extension knows
   where the pane was being sent.
 - **A custom tile icon**, if you set one, is fetched from the URL you entered, by the browser,
   when the tile is drawn.
 
-The extension's network rules (`declarativeNetRequest`) only remove the framing headers
-(`X-Frame-Options`, `Content-Security-Policy` frame directives) that would otherwise stop the
-search engine's page from displaying in the frame. They apply only to sub-frame requests, only
-on the engine domains you can select and any custom engine you add. They block nothing,
-redirect nothing, and give the extension no visibility into the requests themselves.
+The extension's network rules (`declarativeNetRequest`) remove the headers that would otherwise
+stop the search engine's page from displaying in the frame: `X-Frame-Options`, `Frame-Options`
+and `Content-Security-Policy`. They apply only to sub-frame requests, only on the engine domains
+you can select and any custom engine you add. They block nothing, redirect nothing, and give the
+extension no visibility into the requests themselves.
+
+`Content-Security-Policy` is removed in full rather than just its framing directive, because a
+header rule cannot edit one directive out of a header — the only way to drop `frame-ancestors`
+is to drop the header carrying it. That does weaken the engine page's own protections inside the
+pane, and it is the unavoidable cost of embedding a page that asks not to be embedded. It
+applies to the engine page you chose, in the frame, and to no other site.
 
 ## Browsing history
 

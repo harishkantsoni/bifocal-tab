@@ -37,11 +37,40 @@ shortcut list to that service. It is used for display only.
 
 The search half of the page embeds the chosen search engine's own page in an iframe. Those
 pages send X-Frame-Options and frame-ancestors headers that would blank the frame. A static
-ruleset (rules.json) removes only those framing headers, only on sub_frame requests, and only
-for the engine domains the user can pick (google.com, bing.com, duckduckgo.com, yahoo.com,
-brave.com), plus one dynamic rule per custom engine the user adds. No request is blocked,
-redirected or inspected, and no request body or content is read. The declarativeNetRequest
+ruleset (rules.json) removes X-Frame-Options, Frame-Options and Content-Security-Policy, only
+on sub_frame requests, and only for the engine domains the user can pick (google.com, bing.com,
+duckduckgo.com, yahoo.com, brave.com), plus one dynamic rule per custom engine the user adds.
+
+Content-Security-Policy is removed whole rather than per-directive, because header modification
+cannot edit a single directive out of a header — the frame-ancestors directive can only be
+dropped by dropping the header that carries it. That is a real reduction in the engine page's
+own defences and is stated plainly rather than minimised; it applies to the engine page the
+user deliberately chose to embed, in a sub-frame, and to nothing else.
+
+No request is blocked, redirected or inspected, and no request body or content is read. The
 rules are declarative — the extension never sees the traffic.
+
+### webNavigation
+
+The search half embeds the chosen engine's page in a cross-origin iframe, which the extension
+cannot read: not its links, not its location, not its history. When the user clicks a result,
+the extension needs to know where that frame is being sent, because a result must be handed to
+a normal tab instead — most of the web answers X-Frame-Options: DENY and would simply paint
+"refused to connect" inside the pane. webNavigation is the only API that answers that question.
+
+The listener ignores every event that is not the extension's own new tab page: it matches on
+the tab id the page is running in, and within that tab only sub-frames of the top document.
+Events for other tabs are discarded without inspection. When the destination is not the engine
+itself, the extension opens it with chrome.tabs.create and points the pane back at the results.
+
+The address is used for that one decision and then discarded. It is not stored, not written to
+disk, not aggregated and not transmitted; there is no server to transmit it to, and the
+extension holds no history permission and makes no network request of its own.
+
+The alternative to this permission was to strip X-Frame-Options and Content-Security-Policy
+from every site the pane could reach, which would require access to all sites and would take
+the clickjacking defence off each of them. Reading one address and forgetting it is the
+narrower of the two.
 
 ### Host permissions
 

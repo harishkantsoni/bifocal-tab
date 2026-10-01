@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bifocal Tab",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Split new tab: search on one half, bookmark-backed speed dials and groups on the other.",
   "minimum_chrome_version": "108",
   "chrome_url_overrides": {

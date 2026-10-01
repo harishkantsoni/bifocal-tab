@@ -24,23 +24,18 @@ const LEGACY_TITLES = ['Minimal New Tab', 'Focus New Tab'];
  * whose domain has no host permission simply never fires. Google ships as a granted origin
  * because it is the default; the rest are requested the moment they are chosen.
  *
- * `fallbackUrl` is a second address for an engine that publishes an embeddable build of
- * itself. Google's is `/webhp?igu=1` — it frames without complaint, but it is the guest
- * build and is always signed out: no avatar, no apps menu, no personalisation. The plain
- * homepage carries the session instead, so that is what `url` points at and what the frame
- * gets first.
+ * Google is pointed at its plain homepage rather than `/webhp?igu=1`. That second address is
+ * Google's embeddable guest build: it frames without complaint, which is why it was used
+ * first, but it is permanently signed out — no avatar, no apps menu, no personalisation. The
+ * plain homepage carries the session, and stripping SAMEORIGIN is what makes it frame.
  *
- * There is deliberately no login test behind that choice. The frame is cross-origin and
- * unreadable from here, so whether an avatar drew is not a question this extension can ask —
- * and it does not need to. In a third-party frame Google only ever receives the
- * SameSite=None half of the session, which is enough for the avatar; when those cookies are
- * blocked it serves the signed-out page of its own accord. Google performs the fallback we
- * would have written. `fallbackUrl` covers the one failure that is not graceful: a page that
- * framebusts or refuses the frame outright, which `engineFallbacks` records once and never
- * retries. */
+ * There is deliberately no login test behind that choice, because none is possible or needed.
+ * The frame is cross-origin, so whether an avatar drew is not a question this extension can
+ * ask. It does not have to: in a third-party frame Google receives only the SameSite=None half
+ * of the session, which is enough for the avatar, and when those cookies are blocked it serves
+ * the signed-out page of its own accord. Google performs the fallback itself. */
 export const ENGINES = [
-  { id: 'google',     name: 'Google',       url: 'https://www.google.com/',
-    fallbackUrl: 'https://www.google.com/webhp?igu=1',                     origin: '*://*.google.com/*' },
+  { id: 'google',     name: 'Google',       url: 'https://www.google.com/',            origin: '*://*.google.com/*' },
   { id: 'bing',       name: 'Bing',         url: 'https://www.bing.com/',              origin: '*://*.bing.com/*' },
   { id: 'duckduckgo', name: 'DuckDuckGo',   url: 'https://duckduckgo.com/',            origin: '*://*.duckduckgo.com/*' },
   { id: 'yahoo',      name: 'Yahoo',        url: 'https://search.yahoo.com/',          origin: '*://*.yahoo.com/*' },
@@ -64,7 +59,6 @@ const DEFAULT_SETTINGS = {
   splitRatio: 0.5,
   engineId: 'google',
   customEngines: [],      // { id, name, url }
-  engineFallbacks: {},    // engineId -> true, once its preferred page was caught breaking out
   openInNewTab: true      // a tile is somewhere you meant to go; the new tab page stays put
 };
 
@@ -116,20 +110,6 @@ export function allEngines() {
 
 export function engineById(id) {
   return allEngines().find((e) => e.id === id) || ENGINES[0];
-}
-
-/* Where the frame should actually be pointed: the engine's preferred page, unless that page
- * has already been caught refusing to stay in a frame on this profile. */
-export function frameUrl(engine) {
-  const fellBack = (settings.engineFallbacks || {})[engine.id];
-  return (fellBack && engine.fallbackUrl) || engine.url;
-}
-
-/* Every page that counts as the engine's own surface rather than a result. Both addresses
- * belong to the engine, so a click is judged the same way whichever one the pane sat on —
- * without this the fallback's /webhp would read as a result and be fired at a tab. */
-export function engineSurfaceUrls(engine) {
-  return engine.fallbackUrl ? [engine.url, engine.fallbackUrl] : [engine.url];
 }
 
 /* The host permission an engine needs before its framing headers can be stripped.
@@ -443,17 +423,6 @@ export const store = {
   async setSettings(patch) {
     settings = { ...settings, ...patch };
     await chrome.storage.local.set({ settings });
-  },
-
-  /* Remembered rather than re-tested on every new tab: the preferred page only has to be
-   * caught breaking out of the frame once, and retrying it would yank the tab each time.
-   * Answers whether this was news, so the caller can reload only when something changed. */
-  async recordFrameFallback(engineId) {
-    const seen = settings.engineFallbacks || {};
-    if (seen[engineId]) return false;
-    settings = { ...settings, engineFallbacks: { ...seen, [engineId]: true } };
-    await chrome.storage.local.set({ settings });
-    return true;
   },
 
   async addCustomEngine({ name, url }) {

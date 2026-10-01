@@ -86,11 +86,16 @@ Engines block framing, and they all do it differently. Measured response headers
 
 | Engine | Framing header |
 | --- | --- |
+| Google | `X-Frame-Options: SAMEORIGIN` |
 | `google.com/webhp?igu=1` | none |
 | Bing | `X-Frame-Options: SAMEORIGIN` |
 | DuckDuckGo | `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'` |
 | Yahoo | `X-Frame-Options: DENY`, `frame-ancestors 'none'` |
 | Brave, Startpage, Ecosia | `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'` |
+
+Google is the odd one out: it publishes an embeddable build of itself at `/webhp?igu=1` that
+frames with no header at all. The pane does **not** use it — see *Why the pane is signed in*
+below — so Google's SAMEORIGIN needs stripping like everyone else's.
 
 So showing an engine's page means stripping those headers for that site, and stripping headers
 for a site means holding a host permission for it. Rather than ask for all five up front, only
@@ -129,6 +134,29 @@ timeout-based guess produces false alarms.
 
 One thing no extension can fix: the browser puts the caret in the address bar when a new tab
 opens, so the search box inside the frame is not focused. Click it, or type in the address bar.
+
+## Why the pane is signed in
+
+Google's `/webhp?igu=1` is the address every "embed Google in an iframe" recipe reaches for: it
+frames without a fight. The catch is that it is the guest build. It is *permanently* signed out
+— no avatar, no apps menu, no personalisation — and that is not a cookie problem you can fix,
+it is what the page is for.
+
+So the pane loads the plain `https://www.google.com/` and strips SAMEORIGIN like any other
+engine. The session comes with it, and your avatar appears.
+
+There is deliberately no "are you signed in?" check behind that. The frame is cross-origin, so
+whether an avatar drew is not something this page can see — and it does not need to be. The pane
+is a third-party frame, so Google receives only the `SameSite=None` half of your session, which
+is enough for the avatar; the `SameSite=Lax` cookies (`SID`, `__Secure-1PSID`) never travel to a
+cross-site frame and no extension can make them. When those third-party cookies are blocked,
+Google serves its own signed-out page. The fallback is Google's, not ours, which is why there is
+no code here implementing one.
+
+Two consequences worth stating. Searches run in the pane can be tied to your Google account, the
+way they would be in a normal tab — `igu=1` used to prevent that as a side effect of being the
+guest build. And the pane's signed-in state depends on *your* third-party-cookie setting, so it
+is not the same for everybody.
 
 ## Why results open in a tab instead of the pane
 
