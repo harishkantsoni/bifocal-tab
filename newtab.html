@@ -108,7 +108,12 @@
       </div>
 
       <p id="engineNote" class="engine-error" hidden></p>
-      <label class="check"><input id="fieldNewTab" type="checkbox"> Open shortcuts in a new tab</label>
+      <label>Open shortcuts in
+        <select id="fieldDialTarget">
+          <option value="new">A new tab</option>
+          <option value="current">The current tab</option>
+        </select>
+      </label>
       <div class="modal-actions">
         <button type="button" id="flipSidesBtn" class="btn ghost-btn" title="Swap the two halves">Flip split</button>
         <span class="spacer"></span>

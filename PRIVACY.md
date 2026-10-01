@@ -46,6 +46,9 @@ both go to sites you chose:
   would in any other tab, and that engine's own privacy policy applies to it. The extension
   does not read the frame's contents, inject scripts into it, or observe what you type or
   search for.
+- **Clicking a result** opens it in a normal tab rather than inside the pane, because most
+  sites refuse to be framed at all. See *Browsing history* below for how the extension knows
+  where the pane was being sent.
 - **A custom tile icon**, if you set one, is fetched from the URL you entered, by the browser,
   when the tile is drawn.
 
@@ -54,6 +57,30 @@ The extension's network rules (`declarativeNetRequest`) only remove the framing 
 search engine's page from displaying in the frame. They apply only to sub-frame requests, only
 on the engine domains you can select and any custom engine you add. They block nothing,
 redirect nothing, and give the extension no visibility into the requests themselves.
+
+## Browsing history
+
+Chrome warns that this extension can "read your browsing history", which is the warning
+attached to the `webNavigation` permission. What the extension actually does with it is narrow,
+and worth stating plainly.
+
+The search pane is a cross-origin frame, so nothing inside it is readable from the extension's
+page — not its links, not its location, not its history. When you click a search result, the
+only way the extension can learn where the pane is being sent is to ask the browser.
+`webNavigation` is that question. The answer is used for one decision, taken immediately: if
+the destination is not the search engine itself, it is opened in a normal tab and the pane is
+put back on your results.
+
+That address is used at the moment of the click and then discarded. It is not stored, not
+written to disk, not aggregated, and not sent anywhere — there is no server to send it to. The
+extension does not consult navigation events for any other tab, and ignores every event that
+is not the search pane in the tab it is running in.
+
+The alternative to this permission would have been to strip the `X-Frame-Options` and
+`Content-Security-Policy` headers from every site the pane touched, so that results could be
+displayed inside it. That was rejected deliberately: those headers are what stop a page from
+framing your bank and stealing your clicks, and removing them across the web is a far larger
+imposition than reading one address and forgetting it.
 
 ## Host permissions
 

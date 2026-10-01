@@ -136,9 +136,8 @@ function currentEngine() {
 async function applyEngine() {
   const engine = currentEngine();
   const { url } = engine;
-  frameFallbackLink.href = url;
-  popOut.href = url;
-  frameFallback.hidden = true;
+  setPaneUrl(url);
+  hideNotice();
   searchFrame.src = url;
 
   /* Access can also be taken away from chrome://extensions long after it was granted,
@@ -159,10 +158,12 @@ async function applyEngine() {
 // The missing-access notice is the exception: that one is not a guess, so a `load` on the
 // blocked document must not wipe it.
 searchFrame.addEventListener('load', () => {
-  if (frameGrantBtn.hidden) frameFallback.hidden = true;
+  // The flash that says a result went to a tab is itself followed by a frame load, since
+  // the pane is put back where it was. That load must not wipe the explanation for it.
+  if (frameGrantBtn.hidden && !flashTimer) frameFallback.hidden = true;
 });
 searchFrame.addEventListener('error', () => { frameFallback.hidden = false; });
-$('frameNoticeClose').addEventListener('click', () => { frameFallback.hidden = true; });
+$('frameNoticeClose').addEventListener('click', hideNotice);
 
 /* The only way back for an engine that was saved without access: re-picking the same
  * option in the dropdown fires no change event, so there would otherwise be nothing left
@@ -174,6 +175,119 @@ frameGrantBtn.addEventListener('click', () => {
     (err) => { frameNoticeText.textContent = `Could not get access: ${err.message}`; }
   );
 });
+
+/* ------------------------------------------------ results open in real tabs */
+/* The pane shows the engine and nothing else. Follow a result into it and most sites
+ * simply refuse: leetcode.com, github.com and plenty more answer X-Frame-Options: DENY and
+ * Chrome paints "refused to connect" where the page should be. The alternative to this is
+ * deleting that header for every site the pane touches, which means taking the clickjacking
+ * defence off each of them; handing the click to a real tab costs nothing and is what the
+ * click meant anyway.
+ *
+ * None of this is visible from inside the page. The frame is cross-origin, so its links,
+ * its location and its history are all unreadable here, and webNavigation is the only thing
+ * that will say where the pane is being taken. */
+let paneTabId = null;
+let paneUrl = null;      // last engine page the pane actually sat on
+let flashTimer = null;
+
+/* Both escape hatches should point at what the pane is showing now, not at the engine's
+ * front page, so they are fed from the same place. */
+function setPaneUrl(url) {
+  paneUrl = url;
+  popOut.href = url;
+  frameFallbackLink.href = url;
+}
+
+function hideNotice() {
+  clearTimeout(flashTimer);
+  flashTimer = null;
+  frameFallbackLink.hidden = false;
+  frameFallback.hidden = true;
+}
+
+/* Without a word about it, a click that quietly does nothing to the pane reads as a bug. */
+function flashHandoff(url) {
+  clearTimeout(flashTimer);
+  frameNoticeText.textContent = `Opened ${hostOf(url)} in a new tab.`;
+  frameGrantBtn.hidden = true;
+  frameFallbackLink.hidden = true;
+  frameFallback.hidden = false;
+  flashTimer = setTimeout(() => { flashTimer = null; hideNotice(); }, 4000);
+}
+
+/* The pane holds the engine's search surface and nothing past it, so that every result
+ * behaves the same way whoever owns it. Matching on the host alone was not enough: it let a
+ * result pointing at maps.google.com or support.google.com load in the pane while the
+ * identical click on leetcode.com opened a tab, which is the inconsistency this removes. A
+ * Google-owned result is a destination like any other and goes to a tab.
+ *
+ * Some test is unavoidable here. Submitting a search is a frame navigation exactly like
+ * clicking a result, and Chrome describes both as `manual_subframe`, so with nothing
+ * distinguishing them the pane would fire a tab at the moment you searched and could never
+ * show results at all.
+ *
+ * The surface is the engine's own page, the site root, and /search — which every built-in
+ * engine uses for results, including Google's images, news and video tabs and every page
+ * past the first. A custom engine gets whatever path it was added with. */
+function isEngineSurface(url) {
+  const engine = currentEngine();
+  const base = hostOf(engine.url);
+  const host = hostOf(url);
+  if (host !== base && !host.endsWith('.' + base)) return false;
+
+  const tidy = (p) => p.replace(/\/+$/, '') || '/';
+  let path, home;
+  try {
+    path = tidy(new URL(url).pathname);
+    home = tidy(new URL(engine.url).pathname);
+  } catch { return false; }
+
+  return path === '/' || path === home || path.startsWith('/search');
+}
+
+/* A redirect hop and the commit behind it describe one click and must not open a tab each,
+ * so a url just handed over is ignored on the way back. The window is short on purpose: these
+ * events arrive within milliseconds of each other, and anything longer would start swallowing
+ * a second, deliberate click on the same result. */
+const handedOff = new Set();
+const HANDOFF_DEDUPE_MS = 1500;
+
+function onPaneNavigation(details) {
+  // Every open new tab page has these listeners, so each one answers only for its own tab,
+  // and only for the pane rather than the page holding it.
+  if (details.tabId !== paneTabId) return;
+  if (details.frameId === 0 || details.parentFrameId !== 0) return;
+
+  const { url } = details;
+  if (!/^https?:/i.test(url || '')) return;        // about:blank between navigations
+  if (isEngineSurface(url)) { setPaneUrl(url); return; }
+  if (handedOff.has(url)) return;
+
+  handedOff.add(url);
+  setTimeout(() => handedOff.delete(url), HANDOFF_DEDUPE_MS);
+  // openerTabId puts it next to this tab rather than at the end of the strip, and
+  // gives Chrome the back-to-opener relationship a clicked link would have had.
+  chrome.tabs.create({ url, openerTabId: paneTabId });
+
+  /* Put the pane back on the results. Re-pointing the frame also replaces the navigation
+   * that is still in flight, so the blocked page mostly never gets drawn. */
+  if (paneUrl) searchFrame.src = paneUrl;
+  flashHandoff(url);
+}
+
+/* onBeforeNavigate fires again for each server redirect, which is what catches a result
+ * wrapped in google.com/url?q= on the hop that actually leaves the engine. onCommitted is
+ * the backstop for anything that only resolves at commit time, and is also what keeps
+ * paneUrl current as the user searches. */
+async function watchPane() {
+  if (!chrome.webNavigation) return;    // without the permission the pane just behaves as before
+  const tab = await chrome.tabs.getCurrent();
+  if (!tab) return;
+  paneTabId = tab.id;
+  chrome.webNavigation.onBeforeNavigate.addListener(onPaneNavigation);
+  chrome.webNavigation.onCommitted.addListener(onPaneNavigation);
+}
 
 /* --------------------------------------------------------- divider resize */
 divider.addEventListener('pointerdown', (e) => {
@@ -546,7 +660,7 @@ $('settingsBtn').addEventListener('click', () => {
   buildEngineOptions(store.settings.engineId);
   closeEngineAdd();
   showNote('');
-  $('fieldNewTab').checked = !!store.settings.openInNewTab;
+  $('fieldDialTarget').value = store.settings.openInNewTab ? 'new' : 'current';
   settingsOverlay.hidden = false;
 });
 
@@ -647,7 +761,7 @@ settingsForm.addEventListener('submit', async (e) => {
   await store.setSettings({
     searchSide: side,
     engineId,
-    openInNewTab: $('fieldNewTab').checked,
+    openInNewTab: $('fieldDialTarget').value === 'new',
     // swapping sides keeps each pane the width it had
     ...(sideChanged ? { splitRatio: 1 - store.settings.splitRatio } : {})
   });
@@ -782,6 +896,7 @@ paneDials.addEventListener('drop', async (e) => {
 (async function init() {
   await store.init();
   applyLayout();
+  await watchPane();   // before the frame is pointed anywhere, so the first page counts too
   applyEngine();
   render();
 

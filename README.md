@@ -51,7 +51,7 @@ your dials.
 | Action | How |
 | --- | --- |
 | Add a shortcut | **+ Add**, or drag a link out of the search results onto the dial half |
-| Open a shortcut | Click it. Ctrl/Shift/middle-click opens a new tab |
+| Open a shortcut | Click it — a new tab by default. Ctrl/Shift/middle-click is always a new tab |
 | Move a shortcut | Drag it to any slot in the grid |
 | Make a group | Drop one shortcut **onto another shortcut’s icon** — the icon lights up when it will merge |
 | Add to a group | Drop a shortcut onto the group tile’s icon |
@@ -61,10 +61,12 @@ your dials.
 | Search | Use the engine's own box, in the search half |
 | Change engine | Settings → Search engine |
 | Add your own engine | Settings → Search engine → **+ Add a search engine…** |
+| Open shortcuts in this tab instead | Settings → **Open shortcuts in** → The current tab |
 | Move the search half | The **⇄** button, or Settings → Search pane side |
 | Resize the halves | Drag the divider; double-click it to reset to 50/50 |
 
-Search sits on the **right** by default.
+Search sits on the **right** by default, and a shortcut opens in a **new tab** — the new tab
+page stays where it is, which is the point of having the dials and the search side by side.
 
 ## Search engines
 
@@ -128,6 +130,47 @@ timeout-based guess produces false alarms.
 One thing no extension can fix: the browser puts the caret in the address bar when a new tab
 opens, so the search box inside the frame is not focused. Click it, or type in the address bar.
 
+## Why results open in a tab instead of the pane
+
+The header stripping above covers the engine and stops there. Follow a result and the pane
+leaves the engine for somewhere with no rule of its own, and most of the web refuses to be
+framed: `leetcode.com` and `github.com` both answer `X-Frame-Options: DENY`, so Chrome paints
+"refused to connect" where the page should be.
+
+Covering that would mean stripping the header with no domain condition at all — access to
+every site, and the clickjacking defence off each one. Those headers are what stop a page
+framing your bank and harvesting your clicks, and that seemed a poor trade for not having to
+switch tabs. So a result is handed to a real tab instead, opened next to the one it came from,
+and the pane goes back to your results.
+
+The pane cannot see this happening on its own: it is cross-origin, so its links, location and
+history are all unreadable from the page holding it. `webNavigation` is the only thing that
+will say where the frame is being sent, which is why Chrome warns about reading browsing
+history at install. The address is used for that one decision and discarded —
+[PRIVACY.md](PRIVACY.md) has the detail.
+
+**Every** result leaves, whoever owns it. Matching on the host alone would have let a result
+pointing at `maps.google.com` or `support.google.com` load in the pane while the identical
+click on `leetcode.com` opened a tab, and a rule you cannot predict from looking at a link is
+worse than either behaviour on its own. So the pane keeps the engine's *search surface* — its
+own page, the site root, and `/search`, which covers every built-in engine's results, Google's
+images, news and video tabs, and every page past the first — and everything else is a
+destination.
+
+Some test is unavoidable at this point. Submitting a search is a frame navigation exactly like
+clicking a result, and Chrome reports both as `manual_subframe`, so with nothing to tell them
+apart the pane would fire off a tab the moment you searched and could never show results at
+all.
+
+Two rough edges. A result that redirects through the engine (`google.com/url?q=…`) is caught on
+the hop that actually leaves, so the handoff can lag a redirect behind. And putting the pane
+back re-requests the results page, which loses your scroll position in it.
+
+Speed-dial tiles have their own setting — Settings → **Open shortcuts in** — and default to a
+new tab for the same reason a result does: the page you were on keeps its place. Set it to
+*The current tab* to have a tile navigate away instead. Ctrl, Shift and middle-click still
+force a new tab either way, as they do anywhere else in the browser.
+
 ## Permissions
 
 | Permission | Why |
@@ -137,6 +180,7 @@ opens, so the search box inside the frame is not focused. Click it, or type in t
 | `favicon` | Tile icons from the browser's own favicon cache — no external requests |
 | `declarativeNetRequestWithHostAccess` + `*://*.google.com/*` | Strip frame-blocking headers on sub-frames, so the chosen engine renders. Google is granted at install as the default |
 | `optional_host_permissions` | Requested one site at a time, only when you pick another engine or add your own |
+| `webNavigation` | The only way to learn where the cross-origin pane is being sent, so a clicked result can be handed to a real tab. Read at the moment of the click and discarded |
 
 Nothing is collected or sent anywhere — see [PRIVACY.md](PRIVACY.md).
 

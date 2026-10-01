@@ -11,7 +11,8 @@
     "bookmarks",
     "storage",
     "favicon",
-    "declarativeNetRequestWithHostAccess"
+    "declarativeNetRequestWithHostAccess",
+    "webNavigation"
   ],
   "host_permissions": [
     "*://*.google.com/*"

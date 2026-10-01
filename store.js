@@ -48,7 +48,7 @@ const DEFAULT_SETTINGS = {
   splitRatio: 0.5,
   engineId: 'google',
   customEngines: [],      // { id, name, url }
-  openInNewTab: false
+  openInNewTab: true      // a tile is somewhere you meant to go; the new tab page stays put
 };
 
 /* Seeded into the bookmark folder the first time the extension runs, so a fresh
@@ -363,9 +363,21 @@ export const store = {
 
   async init() {
     const saved = await chrome.storage.local.get([
-      'settings', 'icons', 'groupSizes', 'state', 'migrated', 'seeded'
+      'settings', 'icons', 'groupSizes', 'state', 'migrated', 'seeded',
+      'dialTargetDefaulted'
     ]);
     settings = { ...DEFAULT_SETTINGS, ...(saved.settings || {}) };
+
+    /* openInNewTab shipped false and is now the default. Every install that predates the
+     * change has false sitting on disk, and almost none of them chose it: setSettings writes
+     * the whole object, so merely dragging the divider was enough to persist the old default.
+     * Stored values win over DEFAULT_SETTINGS, so the new one is applied once and the fact
+     * recorded; a deliberate switch back to the current tab survives from then on. */
+    if (!saved.dialTargetDefaulted) {
+      settings = { ...settings, openInNewTab: true };
+      await chrome.storage.local.set({ settings, dialTargetDefaulted: true });
+    }
+
     icons = saved.icons || {};
     groupSizes = saved.groupSizes || {};
 
