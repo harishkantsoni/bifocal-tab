@@ -4,7 +4,7 @@
 import {
   store, find, hostOf, normalizeUrl,
   ENGINES, allEngines, engineById, validateEngineUrl, isCustomEngine,
-  hasAccess, requestAccess
+  frameUrl, engineSurfaceUrls, hasAccess, requestAccess
 } from './store.js';
 
 let openGroupId = null;
@@ -135,7 +135,7 @@ function currentEngine() {
  * the pane is the engine's site, which is why the framing headers have to come off. */
 async function applyEngine() {
   const engine = currentEngine();
-  const { url } = engine;
+  const url = frameUrl(engine);
   setPaneUrl(url);
   hideNotice();
   searchFrame.src = url;
@@ -237,13 +237,13 @@ function isEngineSurface(url) {
   if (host !== base && !host.endsWith('.' + base)) return false;
 
   const tidy = (p) => p.replace(/\/+$/, '') || '/';
-  let path, home;
+  let path, homes;
   try {
     path = tidy(new URL(url).pathname);
-    home = tidy(new URL(engine.url).pathname);
+    homes = engineSurfaceUrls(engine).map((u) => tidy(new URL(u).pathname));
   } catch { return false; }
 
-  return path === '/' || path === home || path.startsWith('/search');
+  return path === '/' || homes.includes(path) || path.startsWith('/search');
 }
 
 /* A redirect hop and the commit behind it describe one click and must not open a tab each,
@@ -253,11 +253,50 @@ function isEngineSurface(url) {
 const handedOff = new Set();
 const HANDOFF_DEDUPE_MS = 1500;
 
+/* A dial opened in the current tab is the one top-level navigation this page performs on
+ * purpose, and it can be aimed at the engine's own host like any other bookmark. Marked so
+ * that it is never mistaken for the frame breaking out. */
+let leavingOnPurpose = false;
+function navigateAway(url) {
+  leavingOnPurpose = true;
+  location.href = url;
+}
+
+/* The frame driving the whole tab somewhere is the failure `igu=1` exists to avoid: a
+ * framebusting homepage replaces the new tab page with itself and the split is simply gone.
+ * Nothing here can cancel it — webNavigation only observes — so the tab is let go and the
+ * engine is marked instead, which sends every later new tab straight to the embeddable build.
+ * It costs the one navigation that revealed the problem and does not recur.
+ *
+ * Reaching the engine's own host is not on its own enough to accuse it. Typing google.com in
+ * the omnibox of a fresh new tab looks identical by destination, and marking the engine for
+ * that would strip the avatar from somebody who never had a problem. What separates them is
+ * who asked: a scripted assignment to `top.location` is a renderer-initiated navigation and
+ * Chrome qualifies it `client_redirect`, which omnibox typing, bookmarks and reloads never
+ * carry. That qualifier is the whole test.
+ *
+ * It also only exists on onCommitted, so the absence of the list skips the onBeforeNavigate
+ * pass rather than guessing from it. */
+function onTopNavigation(details) {
+  if (leavingOnPurpose) return;
+  if (!details.transitionQualifiers?.includes('client_redirect')) return;
+
+  const engine = currentEngine();
+  if (!engine.fallbackUrl || frameUrl(engine) === engine.fallbackUrl) return;
+
+  const base = hostOf(engine.url);
+  const host = hostOf(details.url);
+  if (host !== base && !host.endsWith('.' + base)) return;
+
+  store.recordFrameFallback(engine.id);
+}
+
 function onPaneNavigation(details) {
   // Every open new tab page has these listeners, so each one answers only for its own tab,
   // and only for the pane rather than the page holding it.
   if (details.tabId !== paneTabId) return;
-  if (details.frameId === 0 || details.parentFrameId !== 0) return;
+  if (details.frameId === 0) { onTopNavigation(details); return; }
+  if (details.parentFrameId !== 0) return;
 
   const { url } = details;
   if (!/^https?:/i.test(url || '')) return;        // about:blank between navigations
@@ -537,7 +576,7 @@ function activate(item, e) {
   if (store.settings.openInNewTab || e.ctrlKey || e.metaKey || e.shiftKey) {
     window.open(item.url, '_blank', 'noreferrer');
   } else {
-    location.href = item.url;
+    navigateAway(item.url);
   }
 }
 
